@@ -658,4 +658,22 @@ do
   ok(r.stdout:find('socket path length', 1, true) ~= nil, 'doctor: reports socket length headroom')
 end
 
+-- Regression: a Darwin plugin-action env drops TMPDIR; discovery must fall
+-- back to the confstr temp dir where default sockets actually live.
+if uv.os_uname().sysname == 'Darwin' then
+  print('== darwin no-TMPDIR fallback ==')
+  local s = scenario('notmpdir')
+  local real_tmp = vim.fn.system({ 'getconf', 'DARWIN_USER_TEMP_DIR' }):gsub('%s+$', ''):gsub('/+$', '')
+  local d = real_tmp .. '/nvim.' .. s.user .. '/oltest' .. uv.os_getpid()
+  local sock = d .. '/nvim.90001.0'
+  local _, up = H.spawn_nvim(sock, { cwd = s.work })
+  ok(up, 'no-TMPDIR: candidate came up in the confstr temp dir')
+  local r = run_cli(s, { 'list', '--json' }, { env = { TMPDIR = '' } })
+  local obj = jdecode(r.stdout)
+  ok(find_cand(obj, 'addr', sock) ~= nil,
+    'no-TMPDIR: default-shaped socket still discovered', r.stdout)
+  os.remove(sock)
+  uv.fs_rmdir(d)
+end
+
 H.summary({ BASE ~= vim.env.OLTEST_BASE and BASE or nil })

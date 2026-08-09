@@ -407,6 +407,17 @@ local function glob_sockets()
     or getenv('USER') or getenv('LOGNAME') or ''
   local pats = {}
   local tmp = getenv('TMPDIR')
+  if not tmp and (vim.uv or vim.loop).os_uname().sysname == 'Darwin' then
+    -- plugin-action environments drop TMPDIR; the per-user temp dir where
+    -- default sockets actually live is only reachable via confstr
+    local ok, res = pcall(function()
+      return vim.system({ 'getconf', 'DARWIN_USER_TEMP_DIR' }, { timeout = 1000 }):wait()
+    end)
+    if ok and res and res.code == 0 and res.stdout then
+      local dir = res.stdout:gsub('%s+$', '')
+      if dir ~= '' then tmp = dir end
+    end
+  end
   if tmp then
     pats[#pats + 1] = tmp:gsub('/+$', '') .. '/nvim.' .. user .. '/*/nvim.*.0'
   end
