@@ -32,7 +32,9 @@ local function scenario(name)
   s.cache = H.mkdir(s.dir .. '/cache')
   s.run = H.mkdir(s.dir .. '/run')
   s.work = H.mkdir(s.dir .. '/work')
-  s.user = 'u' .. name
+  -- real nvim names its socket dir after the uid (uv passwd), never $USER;
+  -- the CLI matches that, so fake sockets must live under the real name
+  s.user = (vim.uv or vim.loop).os_get_passwd().username
   s.nsock = 0
   s.glob_sock = function()
     s.nsock = s.nsock + 1

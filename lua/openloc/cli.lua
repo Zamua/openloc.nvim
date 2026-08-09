@@ -401,7 +401,10 @@ end
 
 -- R4(b): the three default-socket glob shapes, one level deep.
 local function glob_sockets()
-  local user = getenv('USER') or getenv('LOGNAME') or ''
+  -- uid lookup, not $USER: plugin-action environments may strip it
+  local passwd = (vim.uv or vim.loop).os_get_passwd()
+  local user = (passwd and passwd.username)
+    or getenv('USER') or getenv('LOGNAME') or ''
   local pats = {}
   local tmp = getenv('TMPDIR')
   if tmp then
