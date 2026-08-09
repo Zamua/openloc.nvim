@@ -34,6 +34,27 @@ resolve_herdr() {
   command -v herdr
 }
 
+# Actions run detached, so a failed open is invisible without a toast. Runs the
+# CLI, and on nonzero exit surfaces the first stderr line as a herdr
+# notification. Without a reachable herdr the failure stays stderr-only,
+# visible in `herdr plugin log list`.
+run_cli_notify() {
+  local stderr_file status first herdr_bin
+  stderr_file="$(mktemp "${TMPDIR:-/tmp}/openloc-err.XXXXXX")"
+  status=0
+  "$NVIM_BIN" -l "$CLI" "$@" 2> >(tee "$stderr_file" >&2) || status=$?
+  if [ "$status" -ne 0 ]; then
+    first="$(head -n 1 "$stderr_file" 2>/dev/null || true)"
+    herdr_bin="$(resolve_herdr 2>/dev/null || true)"
+    if [ -n "$herdr_bin" ]; then
+      "$herdr_bin" notification show 'openloc: open failed' \
+        --body "${first:-exit $status}" --sound none >/dev/null 2>&1 || true
+    fi
+  fi
+  rm -f "$stderr_file"
+  exit "$status"
+}
+
 NVIM_BIN="$(resolve_nvim)" || { err 'no nvim found; set OPENLOC_NVIM'; exit 1; }
 
 ROOT="${HERDR_PLUGIN_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"
@@ -200,10 +221,9 @@ EOF
   if [ -n "$cno" ]; then
     set -- "$@" --col "$cno"
   fi
-  # bash skips EXIT traps across exec; the helper is already consumed.
   rm -f "$helper"
   trap - EXIT
-  exec "$NVIM_BIN" -l "$CLI" "$@"
+  run_cli_notify "$@"
 }
 
 cmd="${1:-}"
@@ -215,7 +235,7 @@ case "$cmd" in
       err 'no clicked URL in argv or environment'
       exit 1
     fi
-    exec "$NVIM_BIN" -l "$CLI" open-url "$url"
+    run_cli_notify open-url "$url"
     ;;
   pick)
     do_pick
