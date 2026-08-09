@@ -3,6 +3,12 @@
 Click `src/main.rs:42` in a terminal pane, land on that line in the Neovim
 already running for that workspace: LSP, session and jumplist intact.
 
+![Claude Code answers with a file link; Ctrl+click routes it to the running Neovim](demo/openloc-demo.gif)
+
+The recording is real: Claude Code (instructed via `CLAUDE.md`) answers with
+a markdown link, a Ctrl+click in herdr fires the link handler, and openloc
+routes the jump into the Neovim already open on the left.
+
 openloc is a routing engine with a typed CLI contract: path + line +
 workspace hints in, one chosen live editor out. Producing the input (a herdr
 keybinding, a Ctrl-click on a link, a terminal hint) is a thin adapter.
