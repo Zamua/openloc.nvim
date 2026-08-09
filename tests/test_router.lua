@@ -69,6 +69,7 @@ local function run_cli(s, args, opts)
     OPENLOC_STRICT = '',
     OPENLOC_SPAWN = '',
     OPENLOC_NVIM = '',
+    OPENLOC_PICK_MARGIN = '',
   }
   for k, v in pairs(opts.env or {}) do
     env[k] = v
@@ -107,6 +108,30 @@ local function has_reason(t, needle)
     end
   end
   return false
+end
+
+-- Evaluate an expression inside a live candidate, nil on any failure.
+local function rpc_eval(sock, expr)
+  local okc, chan = pcall(vim.fn.sockconnect, 'pipe', sock, { rpc = true })
+  if not okc or not chan or chan == 0 then
+    return nil
+  end
+  local okr, res = pcall(vim.fn.rpcrequest, chan, 'nvim_eval', expr)
+  pcall(vim.fn.chanclose, chan)
+  if okr then
+    return res
+  end
+  return nil
+end
+
+local function slurp(p)
+  local f = io.open(p, 'r')
+  if not f then
+    return ''
+  end
+  local body = f:read('*a')
+  f:close()
+  return body
 end
 
 -- Any nvim socket left anywhere under the scenario's TMPDIR or runtime dir.
@@ -656,6 +681,320 @@ do
   ok(r.code == 0, 'doctor: exits 0', r.code .. ' ' .. (r.stderr or ''))
   ok(r.stdout:find('cli:', 1, true) ~= nil, 'doctor: reports the resolved cli path')
   ok(r.stdout:find('socket path length', 1, true) ~= nil, 'doctor: reports socket length headroom')
+end
+
+-- ------------------------------------------- --choose auto election / exit 6
+
+print('== choose election ==')
+do
+  local s = scenario('choose')
+  H.lines_file(s.work .. '/f.txt', 20)
+  H.lines_file(s.work .. '/g.txt', 20)
+  H.lines_file(s.work .. '/h.txt', 20)
+  local elsewhere = H.mkdir(s.dir .. '/elsewhere')
+  local sockA, sockB = s.glob_sock(), s.glob_sock()
+  -- A: cwd ancestor of the targets (+20). B: unrelated cwd (0). Gap 20 sits
+  -- under the default margin 75, so both are close AND deterministically
+  -- ordered.
+  local candA, upA = H.spawn_nvim(sockA, { cwd = s.work })
+  local candB, upB = H.spawn_nvim(sockB, { cwd = elsewhere })
+  ok(upA and upB, 'choose: both candidates came up')
+
+  -- default and explicit never: close scores still open
+  local r = run_cli(s, { 'open', 'g.txt', '--spawn', 'never', '--json' })
+  local obj = jdecode(r.stdout)
+  ok(r.code == 0, 'choose: default (no --choose) opens despite close scores', r.code)
+  ok(obj and obj.winner ~= nil, 'choose: default run names a winner')
+  r = run_cli(s, { 'open', 'h.txt', '--choose', 'never', '--spawn', 'never' })
+  ok(r.code == 0, 'choose: explicit --choose never opens despite close scores', r.code)
+
+  -- auto + close scores: exit 6, nothing opened, full JSON contract
+  r = run_cli(s, { 'open', 'f.txt', '--choose', 'auto', '--spawn', 'never', '--json' })
+  obj = jdecode(r.stdout)
+  ok(r.code == 6, 'choose auto: close scores exit 6', r.code .. ' ' .. (r.stderr or ''))
+  ok(obj ~= nil, 'choose auto: exit-6 stdout is one JSON object', r.stdout)
+  if obj then
+    ok(obj.ok == false and obj.exit_code == 6, 'choose auto: json ok=false exit_code=6')
+    ok(obj.reason == 'ambiguous', 'choose auto: json reason=ambiguous', obj.reason)
+    ok(obj.margin == 75, 'choose auto: default margin 75 reported', obj.margin)
+    ok(type(obj.candidates) == 'table' and #obj.candidates == 2,
+      'choose auto: both eligible candidates listed', obj.candidates and #obj.candidates)
+    local c1, c2 = obj.candidates[1], obj.candidates[2]
+    ok(c1 and c2 and c1.score >= c2.score, 'choose auto: candidates sorted score desc')
+    ok(c1 and c1.pid == candA.pid and c1.addr == sockA, 'choose auto: top candidate is the higher scorer')
+    ok(c2 and c2.pid == candB.pid and c2.addr == sockB, 'choose auto: runner-up listed second')
+    ok(c1 and type(c1.cwd) == 'string' and type(c1.reasons) == 'table',
+      'choose auto: candidate carries cwd and reasons')
+    ok(obj.winner == nil, 'choose auto: no winner on exit 6')
+  end
+  local bn = rpc_eval(sockA, 'bufname("%")') or ''
+  ok(not bn:find('f.txt', 1, true), 'choose auto: exit 6 opened nothing', bn)
+
+  -- human form: one stderr line per candidate, none on stdout
+  r = run_cli(s, { 'open', 'f.txt', '--choose', 'auto', '--spawn', 'never' })
+  ok(r.code == 6, 'choose auto: human form exits 6', r.code)
+  local n = select(2, r.stderr:gsub('ambiguous %(margin 75%)', ''))
+  ok(n == 2, 'choose auto: one stderr line per candidate', r.stderr)
+
+  -- OPENLOC_PICK_MARGIN override: gap 20 clears a margin of 10
+  r = run_cli(s, { 'open', 'f.txt', '--choose', 'auto', '--spawn', 'never', '--json' },
+    { env = { OPENLOC_PICK_MARGIN = '10' } })
+  obj = jdecode(r.stdout)
+  ok(r.code == 0, 'choose auto: OPENLOC_PICK_MARGIN override opens', r.code .. ' ' .. (r.stderr or ''))
+  ok(obj and obj.winner and obj.winner.pid == candA.pid, 'choose auto: override winner is the top scorer')
+
+  -- A now holds f.txt (+100): the gap clears the default margin
+  r = run_cli(s, { 'open', 'f.txt', '--choose', 'auto', '--spawn', 'never', '--json' })
+  obj = jdecode(r.stdout)
+  ok(r.code == 0, 'choose auto: clear winner opens', r.code)
+  ok(obj and obj.winner and obj.winner.pid == candA.pid
+    and has_reason(obj.winner, '+100 target already open'),
+    'choose auto: clear winner is the +100 editor')
+
+  -- one eligible candidate left: auto opens without an election
+  candB:kill(9)
+  pcall(function()
+    candB:wait(2000)
+  end)
+  r = run_cli(s, { 'open', 'g.txt', '--choose', 'auto', '--spawn', 'never', '--json' })
+  obj = jdecode(r.stdout)
+  ok(r.code == 0, 'choose auto: single eligible candidate opens', r.code)
+  ok(obj and obj.winner and obj.winner.pid == candA.pid, 'choose auto: sole survivor wins')
+end
+
+-- ------------------------------------------------------- forced --addr
+
+print('== forced --addr ==')
+do
+  local s = scenario('addr')
+  H.lines_file(s.work .. '/f.txt', 20)
+  local target = uv.fs_realpath(s.work .. '/f.txt')
+  local elsewhere = H.mkdir(s.dir .. '/elsewhere')
+  local sockA, sockB = s.glob_sock(), s.glob_sock()
+  local candA, upA = H.spawn_nvim(sockA, { cwd = s.work, args = { target } })
+  local candB, upB = H.spawn_nvim(sockB, { cwd = elsewhere })
+  ok(upA and upB, 'addr: both candidates came up')
+
+  -- sanity: the election prefers A, so B below is a forced NON-winner
+  local r = run_cli(s, { 'open', 'f.txt', '--spawn', 'never', '--json' })
+  local obj = jdecode(r.stdout)
+  ok(r.code == 0 and obj and obj.winner and obj.winner.pid == candA.pid,
+    'addr: election winner is the +100 editor', r.code)
+
+  r = run_cli(s, { 'open', 'f.txt:7:3', '--addr', sockB, '--json' })
+  obj = jdecode(r.stdout)
+  ok(r.code == 0, 'addr: forced open exits 0', r.code .. ' ' .. (r.stderr or ''))
+  ok(obj and obj.winner and obj.winner.addr == sockB and obj.winner.pid == candB.pid,
+    'addr: winner is the forced non-winner')
+  ok(obj and obj.winner and #obj.winner.reasons == 1 and obj.winner.reasons[1] == 'forced --addr',
+    'addr: winner.reasons is exactly forced --addr',
+    obj and obj.winner and vim.inspect(obj.winner.reasons) or nil)
+  local name = rpc_eval(sockB, 'expand("%:p")')
+  ok(name == target, 'addr: file opened in the forced editor', tostring(name))
+  local pos = rpc_eval(sockB, 'getcurpos()')
+  ok(type(pos) == 'table' and pos[2] == 7 and pos[3] == 3,
+    'addr: cursor at 7:3 in the forced editor', vim.inspect(pos))
+
+  -- R0 still runs under --addr
+  H.lines_file(s.dir .. '/out/g.txt', 5)
+  r = run_cli(s, { 'open', s.dir .. '/out/g.txt', '--addr', sockB })
+  ok(r.code == 3, 'addr: confinement still enforced with --addr', r.code)
+
+  -- dead socket: exit 4, discovery never consulted
+  local dead = s.glob_sock()
+  r = run_cli(s, { 'open', 'f.txt', '--addr', dead, '--json' })
+  obj = jdecode(r.stdout)
+  ok(r.code == 4, 'addr: dead socket exits 4', r.code)
+  ok(obj and type(obj.error) == 'string' and obj.error:find('--addr', 1, true) ~= nil,
+    'addr: json error names --addr', obj and obj.error)
+  ok(obj and obj.ok == false and obj.exit_code == 4, 'addr: dead-socket json contract')
+  ok(obj and #obj.candidates == 1, 'addr: no discovery beyond the forced addr',
+    obj and #obj.candidates)
+
+  -- wedged forced target: exit 4
+  ok(H.wedge(sockB), 'addr: fixture wedged')
+  r = run_cli(s, { 'open', 'f.txt', '--addr', sockB })
+  ok(r.code == 4, 'addr: wedged socket exits 4', r.code)
+  ok(r.stderr:find('never answered', 1, true) ~= nil, 'addr: wedged error says never answered', r.stderr)
+end
+
+-- ------------------------------------------------ launcher choose popup
+
+print('== launcher choose popup ==')
+do
+  local s = scenario('popup')
+  H.lines_file(s.work .. '/f.txt', 20)
+  local elsewhere = H.mkdir(s.dir .. '/elsewhere')
+  local sockA, sockB = s.glob_sock(), s.glob_sock()
+  local candA, upA = H.spawn_nvim(sockA, { cwd = s.work })
+  local candB, upB = H.spawn_nvim(sockB, { cwd = elsewhere })
+  ok(upA and upB, 'popup: both candidates came up')
+
+  local function enc(str)
+    return (str:gsub('[^%w%-_%.~]', function(ch)
+      return ('%%%02X'):format(ch:byte())
+    end))
+  end
+  local url = 'https://openloc.invalid/o?p=' .. enc('f.txt') .. '&cwd=' .. enc(s.work)
+
+  -- herdr stub: logs argv to $HERDR_STUB_LOG; pane open exits pane_exit.
+  local function write_stub(dir, pane_exit)
+    H.write_file(dir .. '/herdr', ([[#!/bin/sh
+echo "$@" >> "${HERDR_STUB_LOG:?}"
+if [ "$1 $2 $3" = "plugin pane open" ]; then exit %d; fi
+exit 0
+]]):format(pane_exit))
+    uv.fs_chmod(dir .. '/herdr', tonumber('755', 8))
+    return dir .. '/herdr'
+  end
+  local stub_ok = write_stub(H.mkdir(s.dir .. '/stub-ok'), 0)
+  local stub_fail = write_stub(H.mkdir(s.dir .. '/stub-fail'), 1)
+
+  local launcher = H.root .. '/herdr/bin/openloc-herdr'
+  local iso = {
+    OPENLOC_NVIM = vim.v.progpath,
+    TMPDIR = s.tmp,
+    USER = s.user,
+    LOGNAME = s.user,
+    XDG_RUNTIME_DIR = s.run,
+    XDG_CACHE_HOME = s.cache,
+    HOME = s.dir,
+    PWD = s.work,
+  }
+  local function run_launcher(args, extra)
+    local env = vim.tbl_extend('force', iso, extra or {})
+    return vim.system(vim.list_extend({ 'bash', launcher }, args), {
+      text = true,
+      timeout = 8000,
+      cwd = s.work,
+      env = env,
+    }):wait()
+  end
+
+  -- ambiguous election raises the popup, no toast, nothing opened
+  local log1 = s.dir .. '/stub1.log'
+  local r = run_launcher({ 'open-url', url },
+    { HERDR_BIN_PATH = stub_ok, HERDR_STUB_LOG = log1 })
+  ok(r.code == 0, 'popup: exit 6 handled, launcher exits 0', r.code .. ' ' .. (r.stderr or ''))
+  local logged = slurp(log1)
+  ok(logged:find('plugin pane open', 1, true) ~= nil, 'popup: stub received plugin pane open', logged)
+  ok(logged:find('--plugin openloc', 1, true) ~= nil
+    and logged:find('--entrypoint choose', 1, true) ~= nil,
+    'popup: targets the choose entrypoint', logged)
+  ok(logged:find('--placement popup', 1, true) ~= nil, 'popup: placement popup')
+  ok(logged:find('OPENLOC_CHOOSE_JSON=', 1, true) ~= nil, 'popup: JSON forwarded via --env')
+  ok(logged:find('ambiguous', 1, true) ~= nil, 'popup: forwarded JSON is the exit-6 payload')
+  ok(logged:find('OPENLOC_CHOOSE_ARGS=open-url', 1, true) ~= nil,
+    'popup: original args forwarded via --env', logged)
+  ok(logged:find('notification show', 1, true) == nil, 'popup: no toast on exit 6')
+  local bn = rpc_eval(sockA, 'bufname("%")') or ''
+  ok(not bn:find('f.txt', 1, true), 'popup: nothing opened while the popup pends', bn)
+
+  -- pane open fails: fall back to a direct open of the top candidate
+  local log2 = s.dir .. '/stub2.log'
+  r = run_launcher({ 'open-url', url },
+    { HERDR_BIN_PATH = stub_fail, HERDR_STUB_LOG = log2 })
+  ok(r.code == 0, 'popup: failed pane open falls back to direct open', r.code .. ' ' .. (r.stderr or ''))
+  ok(r.stdout:find('opened ', 1, true) ~= nil and r.stdout:find(sockA, 1, true) ~= nil,
+    'popup: fallback opened the top candidate', r.stdout)
+  local logged2 = slurp(log2)
+  ok(logged2:find('plugin pane open', 1, true) ~= nil, 'popup: failing stub was consulted')
+  ok(logged2:find('notification show', 1, true) == nil, 'popup: fallback open raises no toast', logged2)
+
+  -- run_cli_notify guard: a CLI stuck at exit 6 never toasts...
+  local fake6 = s.dir .. '/fake6.lua'
+  H.write_file(fake6, 'io.stdout:write("{}\\n")\nos.exit(6)\n')
+  local log3 = s.dir .. '/stub3.log'
+  r = run_launcher({ 'open-url', url },
+    { HERDR_BIN_PATH = stub_fail, HERDR_STUB_LOG = log3, OPENLOC_CLI = fake6 })
+  ok(r.code == 6, 'notify: exit 6 propagates through the fallback', r.code)
+  local logged3 = slurp(log3)
+  ok(logged3:find('plugin pane open', 1, true) ~= nil, 'notify: exit-6 path ran (stub consulted)')
+  ok(logged3:find('notification show', 1, true) == nil, 'notify: no toast on exit 6', logged3)
+
+  -- ...while a real failure still does (the guard is not vacuous)
+  local fake4 = s.dir .. '/fake4.lua'
+  H.write_file(fake4, 'io.stderr:write("boom failure\\n")\nos.exit(4)\n')
+  local log4 = s.dir .. '/stub4.log'
+  r = run_launcher({ 'open-url', url },
+    { HERDR_BIN_PATH = stub_fail, HERDR_STUB_LOG = log4, OPENLOC_CLI = fake4 })
+  ok(r.code == 4, 'notify: real failures propagate', r.code)
+  local logged4 = slurp(log4)
+  ok(logged4:find('notification show', 1, true) ~= nil,
+    'notify: real failure raises the toast', logged4)
+
+  -- A failing exit must run the CLI exactly once. Re-running holds a second
+  -- election, which can elect a different editor, and after exit 4 or 5 the
+  -- first one may already hold the file.
+  for _, code in ipairs({ 3, 4, 5 }) do
+    local counter = s.dir .. '/count' .. code .. '.txt'
+    local fake = s.dir .. '/fake-count' .. code .. '.lua'
+    H.write_file(fake, ([[
+local f = io.open(%q, 'a')
+f:write('x\n')
+f:close()
+io.stderr:write('failure %d\n')
+os.exit(%d)
+]]):format(counter, code, code))
+    run_launcher({ 'open-url', url },
+      { HERDR_BIN_PATH = stub_fail, HERDR_STUB_LOG = s.dir .. '/stubc.log', OPENLOC_CLI = fake })
+    local runs = select(2, slurp(counter):gsub('x', ''))
+    ok(runs == 1, 'no-retry: exit ' .. code .. ' invokes the CLI once', tostring(runs))
+  end
+end
+
+-- ---------------------------------------------- chooser popup script
+
+print('== chooser popup script ==')
+do
+  local s = scenario('chooser')
+  H.lines_file(s.work .. '/f.txt', 20)
+  local target = uv.fs_realpath(s.work .. '/f.txt')
+  local elsewhere = H.mkdir(s.dir .. '/elsewhere')
+  local sockA, sockB = s.glob_sock(), s.glob_sock()
+  local candA, upA = H.spawn_nvim(sockA, { cwd = s.work })
+  local candB, upB = H.spawn_nvim(sockB, { cwd = elsewhere })
+  ok(upA and upB, 'chooser: both candidates came up')
+
+  -- real exit-6 payload from the CLI, exactly what the launcher forwards
+  local r = run_cli(s, { 'open', 'f.txt', '--choose', 'auto', '--spawn', 'never', '--json' })
+  ok(r.code == 6, 'chooser: fixture election is ambiguous', r.code)
+  local payload = vim.trim(r.stdout or '')
+
+  local chooser = H.root .. '/herdr/bin/openloc-choose'
+  local function run_chooser(input)
+    local env = {
+      OPENLOC_NVIM = vim.v.progpath,
+      OPENLOC_CHOOSE_JSON = payload,
+      OPENLOC_CHOOSE_ARGS = 'open\tf.txt',
+      OPENLOC_CHOOSE_INPUT = input,
+      TMPDIR = s.tmp,
+      USER = s.user,
+      LOGNAME = s.user,
+      XDG_RUNTIME_DIR = s.run,
+      XDG_CACHE_HOME = s.cache,
+      HOME = s.dir,
+      PWD = s.work,
+    }
+    return vim.system({ 'bash', chooser }, {
+      text = true,
+      timeout = 8000,
+      cwd = s.work,
+      env = env,
+    }):wait()
+  end
+
+  -- payload order is score desc: 1 = A (+20 cwd), 2 = B (0)
+  r = run_chooser('2')
+  ok(r.code == 0, 'chooser: forced pick 2 exits 0', r.code .. ' ' .. (r.stderr or ''))
+  ok(r.stdout:find('pick one', 1, true) ~= nil, 'chooser: menu rendered', r.stdout)
+  ok(r.stdout:find(sockB, 1, true) ~= nil, 'chooser: pick 2 opened at the runner-up addr', r.stdout)
+  local name = rpc_eval(sockB, 'expand("%:p")')
+  ok(name == target, 'chooser: file open in the picked editor', tostring(name))
+
+  r = run_chooser('junk')
+  ok(r.code == 0 and r.stdout:find(sockA, 1, true) ~= nil,
+    'chooser: non-numeric input defaults to the top score', r.stdout)
 end
 
 -- Regression: a Darwin plugin-action env drops TMPDIR; discovery must fall

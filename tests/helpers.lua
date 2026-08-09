@@ -146,6 +146,7 @@ function M.ensure_isolated(name, script_path)
     OPENLOC_SPAWN = true,
     OPENLOC_NVIM = true,
     OPENLOC_CLI = true,
+    OPENLOC_PICK_MARGIN = true,
   }
   local env = {}
   for k, v in pairs(vim.fn.environ()) do

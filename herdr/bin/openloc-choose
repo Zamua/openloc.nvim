@@ -1,0 +1,134 @@
+#!/usr/bin/env bash
+# herdr popup chooser: renders the ambiguous-candidate menu carried in
+# OPENLOC_CHOOSE_JSON (the CLI's exit-6 payload), reads a pick from the popup
+# tty, then re-runs the original open forced to the chosen editor via --addr.
+# The popup closes when this script exits.
+set -euo pipefail
+
+err() { printf 'openloc-choose: %s\n' "$*" >&2; }
+
+# The popup vanishes on exit; hold failures on screen long enough to read.
+fail() {
+  err "$*"
+  sleep 3
+  exit 1
+}
+
+resolve_nvim() {
+  if [ -n "${OPENLOC_NVIM:-}" ] && [ -x "${OPENLOC_NVIM:-}" ]; then
+    printf '%s\n' "$OPENLOC_NVIM"
+    return 0
+  fi
+  if command -v nvim >/dev/null 2>&1; then
+    command -v nvim
+    return 0
+  fi
+  local cand
+  for cand in /opt/homebrew/bin/nvim /usr/local/bin/nvim /usr/bin/nvim; do
+    if [ -x "$cand" ]; then
+      printf '%s\n' "$cand"
+      return 0
+    fi
+  done
+  return 1
+}
+
+NVIM_BIN="$(resolve_nvim)" || fail 'no nvim found; set OPENLOC_NVIM'
+
+ROOT="${HERDR_PLUGIN_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"
+CLI="${OPENLOC_CLI:-$ROOT/cli/openloc.lua}"
+[ -f "$CLI" ] || CLI="$ROOT/../lua/openloc/cli.lua"
+[ -f "$CLI" ] || fail "no CLI found under $ROOT; reinstall the plugin"
+
+[ -n "${OPENLOC_CHOOSE_JSON:-}" ] || fail 'OPENLOC_CHOOSE_JSON is empty'
+[ -n "${OPENLOC_CHOOSE_ARGS:-}" ] || fail 'OPENLOC_CHOOSE_ARGS is empty'
+
+# JSON parsing stays in Lua: `menu` prints 'index<TAB>display' rows in the
+# payload's order (best score first), `addr N` prints candidate N's socket.
+HELPER="$(mktemp "${TMPDIR:-/tmp}/openloc-choose.XXXXXX")"
+trap 'rm -f "$HELPER"' EXIT
+cat >"$HELPER" <<'OPENLOC_CHOOSE_EOF'
+-- Generated at runtime by openloc-choose; never installed.
+-- nvim -l publishes its own server socket; retract it before anything else.
+pcall(vim.fn.serverstop, vim.v.servername)
+local raw = vim.env.OPENLOC_CHOOSE_JSON
+if not raw or raw == '' then os.exit(1) end
+local ok, obj = pcall(vim.json.decode, raw, { luanil = { object = true, array = true } })
+if not ok or type(obj) ~= 'table' or type(obj.candidates) ~= 'table' or #obj.candidates == 0 then
+  os.exit(1)
+end
+local cands = obj.candidates
+local mode = (_G.arg and _G.arg[1]) or 'menu'
+if mode == 'addr' then
+  local c = cands[tonumber(_G.arg and _G.arg[2]) or 0]
+  if not c or type(c.addr) ~= 'string' or c.addr == '' then os.exit(1) end
+  io.write(c.addr, '\n')
+  os.exit(0)
+end
+local home = vim.env.HOME
+local out = {}
+for i, c in ipairs(cands) do
+  local cwd = type(c.cwd) == 'string' and c.cwd or '?'
+  if home and home ~= '' and (cwd == home or cwd:sub(1, #home + 1) == home .. '/') then
+    cwd = '~' .. cwd:sub(#home + 1)
+  end
+  local ws = (type(c.ws) == 'string' and c.ws ~= '') and (' ws=' .. c.ws) or ''
+  out[#out + 1] = string.format('%d\t%s%s pid=%s score=%s',
+    i, cwd, ws, tostring(c.pid or '?'), tostring(c.score or 0))
+end
+io.write(table.concat(out, '\n'), '\n')
+OPENLOC_CHOOSE_EOF
+
+menu="$("$NVIM_BIN" -l "$HELPER" menu)" || fail 'cannot parse OPENLOC_CHOOSE_JSON'
+count="$(printf '%s\n' "$menu" | wc -l | tr -d ' ')"
+
+printf 'openloc: %s editors match; pick one\n' "$count"
+while IFS=$'\t' read -r i disp; do
+  printf '%2d) %s\n' "$i" "$disp"
+done <<EOF
+$menu
+EOF
+
+# OPENLOC_CHOOSE_INPUT preset skips the tty read (test seam). A timeout or
+# non-numeric answer takes the top-scored row.
+answer="${OPENLOC_CHOOSE_INPUT:-}"
+if [ -z "$answer" ]; then
+  printf 'choose [1-%d, default 1]: ' "$count"
+  IFS= read -r -t 30 answer </dev/tty || answer=""
+  printf '\n'
+fi
+choice=1
+case "$answer" in
+  '' | *[!0-9]*) ;;
+  *)
+    if [ "$answer" -ge 1 ] && [ "$answer" -le "$count" ]; then
+      choice="$answer"
+    fi
+    ;;
+esac
+
+addr="$("$NVIM_BIN" -l "$HELPER" addr "$choice")" || fail 'internal: no addr for that choice'
+
+# Rebuild the original open args, dropping the election flags.
+set --
+skip=0
+while IFS= read -r a; do
+  if [ "$skip" -eq 1 ]; then
+    skip=0
+    continue
+  fi
+  case "$a" in
+    --choose) skip=1 ;;
+    --json) ;;
+    *) set -- "$@" "$a" ;;
+  esac
+done < <(printf '%s\n' "$OPENLOC_CHOOSE_ARGS" | tr '\t' '\n')
+[ "$#" -gt 0 ] || fail 'internal: OPENLOC_CHOOSE_ARGS carries no open command'
+
+status=0
+"$NVIM_BIN" -l "$CLI" "$@" --addr "$addr" || status=$?
+if [ "$status" -ne 0 ]; then
+  sleep 3
+  exit "$status"
+fi
+exit 0

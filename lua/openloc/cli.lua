@@ -33,12 +33,16 @@ local EXIT = {
   unresolved = 3,
   open_failed = 4,
   deadline = 5,
+  ambiguous = 6,
 }
+
+local DEFAULT_PICK_MARGIN = 75
 
 local USAGE = table.concat({
   'usage: nvim -l bin/openloc <command> [args]',
-  '  open <path>[:line[:col]] [--ws ID] [--cwd PATH] [--line N] [--col N] [--json] [--spawn split|never]',
-  '  open-url <url> [--strict] [--json] [--spawn split|never]',
+  '  open <path>[:line[:col]] [--ws ID] [--cwd PATH] [--line N] [--col N] [--addr SOCKET]',
+  '       [--choose auto|never] [--json] [--spawn split|never]',
+  '  open-url <url> [--strict] [--addr SOCKET] [--choose auto|never] [--json] [--spawn split|never]',
   '  list [--json]',
   '  doctor',
 }, '\n') .. '\n'
@@ -203,6 +207,7 @@ end
 -- ------------------------------------------------------------ argv parsing
 
 local SPAWN_MODES = { split = true, never = true }
+local CHOOSE_MODES = { auto = true, never = true }
 
 local function parse_flags(argv, i0)
   local flags, pos = {}, {}
@@ -248,6 +253,13 @@ local function parse_flags(argv, i0)
       flags.spawn = value(a)
       if not err and not SPAWN_MODES[flags.spawn or ''] then
         return nil, '--spawn takes split|never'
+      end
+    elseif a == '--addr' then
+      flags.addr = value(a)
+    elseif a == '--choose' then
+      flags.choose = value(a)
+      if not err and not CHOOSE_MODES[flags.choose or ''] then
+        return nil, '--choose takes auto|never'
       end
     elseif a:sub(1, 2) == '--' then
       return nil, 'unknown flag: ' .. a
@@ -718,7 +730,8 @@ local function score_candidate(state, c, ctx, target, target_git, live)
   c.longest = longest
 end
 
-local function pick_winner(state)
+-- Eligible candidates (responsive, non-excluded) sorted best first.
+local function eligible_sorted(state)
   local eligible = {}
   for _, addr in ipairs(state.order) do
     local c = state.cands[addr]
@@ -745,7 +758,7 @@ local function pick_winner(state)
     end
     return (a.payload.pid or math.huge) < (b.payload.pid or math.huge)
   end)
-  return eligible[1]
+  return eligible
 end
 
 -- ----------------------------------------------------------------- output
@@ -804,6 +817,47 @@ local function emit(state, code, human, err)
     end
   end
   return code
+end
+
+-- Only ever reached with --choose auto: >= 2 eligible candidates and a score
+-- gap under the margin. Nothing is opened; callers render the choice.
+local function emit_ambiguous(state, eligible, margin)
+  state.code = EXIT.ambiguous
+  local dur = math.floor((uv.hrtime() - state.t0) / 1e6)
+  if state.json then
+    local cands = {}
+    for _, c in ipairs(eligible) do
+      local p = c.payload or {}
+      cands[#cands + 1] = {
+        addr = c.addr,
+        pid = p.pid,
+        score = c.score,
+        cwd = p.cwd,
+        ws = p.ws,
+        reasons = c.reasons,
+      }
+    end
+    io.stdout:write(vim.json.encode({
+      ok = false,
+      exit_code = EXIT.ambiguous,
+      reason = 'ambiguous',
+      margin = margin,
+      target = state.target,
+      line = state.line,
+      col = state.col,
+      candidates = cands,
+      duration_ms = dur,
+    }), '\n')
+  else
+    for _, c in ipairs(eligible) do
+      local p = c.payload or {}
+      io.stderr:write(string.format(
+        'openloc: ambiguous (margin %d): score=%-5d pid=%-8s ws=%-8s cwd=%s addr=%s\n',
+        margin, c.score, tostring(p.pid or '-'), tostring(p.ws or '-'), tostring(p.cwd or '-'), c.addr
+      ))
+    end
+  end
+  return EXIT.ambiguous
 end
 
 -- ------------------------------------------------------------ R8, R9, R10
@@ -954,23 +1008,50 @@ local function cmd_open(state, argv, is_url)
       'confinement: ' .. target .. ' is outside every resolved root (set OPENLOC_ALLOW to permit)')
   end
 
-  -- R1-R3 fast paths, then R4+R5, R6, R7.
-  local winner = fast_path(state, ctx, roots, target)
+  -- Forced target: no discovery, no election, just a liveness probe.
+  local winner
   local target_git = norm_dir(vim.fs.root(target, '.git'))
-  local live
-  if winner then
-    score_candidate(state, winner, ctx, target, target_git, nil)
-    if winner.excluded then
-      winner = nil
+  if flags.addr then
+    local c = add_candidate(state, flags.addr, 'forced')
+    local results, status =
+      remote.probe_all({ flags.addr }, clamp(state, remote.PROBE_PER_CANDIDATE_MS, RESERVE_PROBE_MS), { target = target })
+    record_probe(state, results, status)
+    if c.status ~= 'ok' then
+      local why = c.status == 'wedged'
+        and 'accepted the socket but never answered'
+        or 'has no editor listening (connect failed)'
+      return emit(state, EXIT.open_failed, nil, '--addr ' .. flags.addr .. ' ' .. why)
     end
-  end
-  if not winner then
-    probe_all_candidates(state, target)
-    live = build_live_map(state, ctx)
-    for _, addr in ipairs(state.order) do
-      score_candidate(state, state.cands[addr], ctx, target, target_git, live)
+    c.reasons = { 'forced --addr' }
+    winner = c
+  else
+    -- R1-R3 fast paths, then R4+R5, R6, R7. --choose auto needs the full
+    -- candidate set to judge ambiguity, so the fast path is skipped there.
+    local choose = flags.choose or 'never'
+    if choose ~= 'auto' then
+      winner = fast_path(state, ctx, roots, target)
+      if winner then
+        score_candidate(state, winner, ctx, target, target_git, nil)
+        if winner.excluded then
+          winner = nil
+        end
+      end
     end
-    winner = pick_winner(state)
+    if not winner then
+      probe_all_candidates(state, target)
+      local live = build_live_map(state, ctx)
+      for _, addr in ipairs(state.order) do
+        score_candidate(state, state.cands[addr], ctx, target, target_git, live)
+      end
+      local eligible = eligible_sorted(state)
+      if choose == 'auto' and #eligible >= 2 then
+        local margin = tonumber(getenv('OPENLOC_PICK_MARGIN')) or DEFAULT_PICK_MARGIN
+        if (eligible[1].score - eligible[2].score) < margin then
+          return emit_ambiguous(state, eligible, margin)
+        end
+      end
+      winner = eligible[1]
+    end
   end
 
   if not winner then

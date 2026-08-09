@@ -34,24 +34,73 @@ resolve_herdr() {
   command -v herdr
 }
 
-# Actions run detached, so a failed open is invisible without a toast. Runs the
-# CLI, and on nonzero exit surfaces the first stderr line as a herdr
-# notification. Without a reachable herdr the failure stays stderr-only,
-# visible in `herdr plugin log list`.
+# Actions run detached, so a failed open is invisible without a toast.
+toast_failure() {
+  local status="$1" first="$2" herdr_bin
+  herdr_bin="$(resolve_herdr 2>/dev/null || true)"
+  if [ -n "$herdr_bin" ]; then
+    "$herdr_bin" notification show 'openloc: open failed' \
+      --body "${first:-exit $status}" --sound none >/dev/null 2>&1 || true
+  fi
+}
+
+# Runs the CLI once and toasts the first stderr line on failure. Exit 6
+# (ambiguous) is a routing outcome, not a failure: no toast.
 run_cli_notify() {
-  local stderr_file status first herdr_bin
+  local stderr_file status first
   stderr_file="$(mktemp "${TMPDIR:-/tmp}/openloc-err.XXXXXX")"
   status=0
-  "$NVIM_BIN" -l "$CLI" "$@" 2> >(tee "$stderr_file" >&2) || status=$?
-  if [ "$status" -ne 0 ]; then
+  "$NVIM_BIN" -l "$CLI" "$@" 2>"$stderr_file" || status=$?
+  cat "$stderr_file" >&2
+  if [ "$status" -ne 0 ] && [ "$status" -ne 6 ]; then
     first="$(head -n 1 "$stderr_file" 2>/dev/null || true)"
-    herdr_bin="$(resolve_herdr 2>/dev/null || true)"
-    if [ -n "$herdr_bin" ]; then
-      "$herdr_bin" notification show 'openloc: open failed' \
-        --body "${first:-exit $status}" --sound none >/dev/null 2>&1 || true
-    fi
+    toast_failure "$status" "$first"
   fi
   rm -f "$stderr_file"
+  exit "$status"
+}
+
+tab_join() {
+  local IFS=$'\t'
+  printf '%s' "$*"
+}
+
+# Runs the CLI with the ambiguity election on. Exit 6 raises the chooser
+# popup, passing the raw JSON through untouched; no herdr or a failed popup
+# falls back to the top candidate so a click never dead-ends. Never returns.
+#
+# A failing exit toasts from THIS run's stderr and never re-runs the CLI: a
+# second election can elect a different editor, and after exit 4 or 5 the
+# first one may already hold the file. Only exit 6 is safe to re-run, because
+# it is defined as having opened nothing.
+run_cli_choose() {
+  local out stderr_file status first herdr_bin
+  stderr_file="$(mktemp "${TMPDIR:-/tmp}/openloc-err.XXXXXX")"
+  status=0
+  out="$("$NVIM_BIN" -l "$CLI" "$@" --choose auto --json 2>"$stderr_file")" || status=$?
+  cat "$stderr_file" >&2
+
+  if [ "$status" -eq 0 ]; then
+    rm -f "$stderr_file"
+    [ -n "$out" ] && printf '%s\n' "$out"
+    exit 0
+  fi
+
+  if [ "$status" -eq 6 ]; then
+    rm -f "$stderr_file"
+    herdr_bin="$(resolve_herdr 2>/dev/null || true)"
+    if [ -n "$herdr_bin" ] && "$herdr_bin" plugin pane open --plugin openloc --entrypoint choose \
+      --placement popup --width '70%' --height '50%' --focus \
+      --env OPENLOC_CHOOSE_JSON="$out" --env OPENLOC_CHOOSE_ARGS="$(tab_join "$@")" \
+      >/dev/null 2>&1; then
+      exit 0
+    fi
+    run_cli_notify "$@" --choose never
+  fi
+
+  first="$(head -n 1 "$stderr_file" 2>/dev/null || true)"
+  rm -f "$stderr_file"
+  toast_failure "$status" "$first"
   exit "$status"
 }
 
@@ -223,7 +272,7 @@ EOF
   fi
   rm -f "$helper"
   trap - EXIT
-  run_cli_notify "$@"
+  run_cli_choose "$@"
 }
 
 cmd="${1:-}"
@@ -235,7 +284,7 @@ case "$cmd" in
       err 'no clicked URL in argv or environment'
       exit 1
     fi
-    run_cli_notify open-url "$url"
+    run_cli_choose open-url "$url"
     ;;
   pick)
     do_pick
