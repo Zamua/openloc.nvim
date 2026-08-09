@@ -1,0 +1,16 @@
+-- Entry point for `nvim -l bin/openloc <command> [args]`.
+--
+-- R-1: nvim -l unconditionally starts its own server in the very directory
+-- candidate discovery globs, inheriting HERDR_WORKSPACE_ID, so without this
+-- retraction the CLI is always its own top-scoring candidate and every open
+-- "succeeds" into a process that exits milliseconds later. It must run before
+-- anything else.
+pcall(vim.fn.serverstop, vim.v.servername)
+
+local src = debug.getinfo(1, 'S').source:gsub('^@', '')
+local real = (vim.uv or vim.loop).fs_realpath(src) or src
+local repo = vim.fs.dirname(vim.fs.dirname(real))
+package.path = repo .. '/lua/?.lua;' .. repo .. '/lua/?/init.lua;' .. package.path
+
+local cli = dofile(repo .. '/lua/openloc/cli.lua')
+os.exit(cli.main(_G.arg))

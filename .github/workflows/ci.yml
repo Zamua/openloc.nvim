@@ -1,0 +1,45 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset: nvim-linux-x86_64
+          - os: macos-latest
+            asset: nvim-macos-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install Neovim stable
+        run: |
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/nvim.tar.gz" \
+            "https://github.com/neovim/neovim/releases/download/stable/${{ matrix.asset }}.tar.gz"
+          tar -C "$RUNNER_TEMP" -xzf "$RUNNER_TEMP/nvim.tar.gz"
+          echo "$RUNNER_TEMP/${{ matrix.asset }}/bin" >> "$GITHUB_PATH"
+
+      - name: Versions
+        run: nvim --version | head -n 2
+
+      - name: Static checks
+        run: |
+          bash -n herdr/bin/openloc-herdr
+          python3 - <<'EOF'
+          import tomllib
+          with open("herdr/herdr-plugin.toml", "rb") as f:
+              m = tomllib.load(f)
+          want = r"^https://openloc\.invalid/o\?.*$"
+          got = m["link_handlers"][0]["pattern"]
+          assert got == want, got
+          EOF
+
+      - name: Run tests
+        run: bash tests/run.sh
