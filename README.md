@@ -125,6 +125,10 @@ clamp. Stock Neovims without the plugin work through the same inlined open.
 - `herdr plugin log list --plugin openloc`: what an action printed.
 - A Neovim parked at a hit-enter or swapfile prompt answers no RPC: openloc
   reports it wedged (exit 5) instead of hanging. Press enter there, retry.
+- Ctrl+click works but also opens a browser tab: herdr 0.7.x forwards an
+  unmatched mouse release into the pane, and agents like Claude Code open
+  URLs on Ctrl+click themselves. Fixed upstream in herdr 0.8.0 (#1761);
+  upgrade herdr.
 
 ## License
 
