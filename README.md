@@ -22,14 +22,15 @@ herdr fires it, openloc jumps the Neovim on the left to the line.
    herdr plugin install Zamua/openloc.nvim/herdr
    ```
 
-3. Tell your agent to emit clickable refs. For Claude Code, add one line to
-   `CLAUDE.md`:
+3. Claude Code plugin (makes the agent emit clickable refs):
 
    ```
-   When you reference a source location, render it as a markdown link:
-   [src/app.rs:42](https://openloc.invalid/o?p=src%2Fapp.rs&l=42)
-   Percent-encode the p value and keep the display text as path:line.
+   /plugin marketplace add Zamua/openloc.nvim
+   /plugin install openloc@openloc
    ```
+
+   Other agents, or no plugin: add the one-line instruction from
+   [docs/reference.md](docs/reference.md) to the agent's context file.
 
 4. Optional but recommended: enable herdr toasts so failed opens explain
    themselves. In `~/.config/herdr/config.toml`:

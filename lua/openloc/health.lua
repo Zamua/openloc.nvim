@@ -109,6 +109,39 @@ function M.check()
     health.info('herdr not on PATH; routing works, but the CLI cannot resolve live workspace ids')
   end
   health.info('herdr Ctrl-click needs mouse_capture = true (the default) and the modifier is Ctrl on every platform, including macOS; the keyboard picker works regardless')
+
+  health.start('install points')
+  if vim.fn.executable('herdr') == 1 then
+    local plugins = vim.fn.system({ 'herdr', 'plugin', 'list' })
+    if plugins:find('openloc', 1, true) then
+      health.ok('herdr plugin installed')
+    else
+      health.warn('herdr plugin not installed',
+        'herdr plugin install Zamua/openloc.nvim/herdr')
+    end
+    local conf = vim.fn.expand('~/.config/herdr/config.toml')
+    local body = ''
+    local f = io.open(conf, 'r')
+    if f then
+      body = f:read('*a')
+      f:close()
+    end
+    if body:find('%[ui%.toast%]') and not body:find('delivery%s*=%s*"off"') then
+      health.ok('herdr toast delivery enabled (failed opens explain themselves)')
+    else
+      health.info('herdr toasts off (optional): add [ui.toast] delivery = "herdr" to '
+        .. conf .. ' then run: herdr server reload-config')
+    end
+  end
+  if vim.fn.executable('claude') == 1 then
+    local list = vim.fn.system({ 'claude', 'plugin', 'list' })
+    if list:find('openloc', 1, true) then
+      health.ok('Claude Code plugin installed (agent emits clickable refs)')
+    else
+      health.info('Claude Code plugin not installed: /plugin marketplace add Zamua/openloc.nvim '
+        .. 'then /plugin install openloc@openloc (or add the instruction line from docs/reference.md)')
+    end
+  end
 end
 
 return M

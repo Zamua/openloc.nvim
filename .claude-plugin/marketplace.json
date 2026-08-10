@@ -1,0 +1,12 @@
+{
+  "name": "openloc",
+  "owner": { "name": "Zamua" },
+  "description": "openloc: click a file reference, land in the Neovim already running for that workspace.",
+  "plugins": [
+    {
+      "name": "openloc",
+      "source": "./claude",
+      "description": "Makes the agent render source locations as openloc links; Ctrl+click one in herdr and the workspace's running Neovim jumps to that line."
+    }
+  ]
+}

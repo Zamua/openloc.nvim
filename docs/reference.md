@@ -53,8 +53,13 @@ Non-http(s) URLs are rejected.
 
 ## Making an agent emit clickable refs
 
-One line in the agent's instructions (for Claude Code: `CLAUDE.md` or an
-output style):
+Claude Code: install the bundled plugin (`/plugin marketplace add
+Zamua/openloc.nvim`, then `/plugin install openloc@openloc`). Its
+SessionStart hook injects the instruction below automatically;
+`OPENLOC_LINKS=off` in the environment disables it.
+
+Any other agent, or without the plugin, add one line to the agent's
+instructions:
 
 ```
 When you reference a source location, render it as a markdown link:
