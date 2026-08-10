@@ -997,6 +997,86 @@ do
     'chooser: non-numeric input defaults to the top score', r.stdout)
 end
 
+
+-- ------------------------------------ R9 spawn lock: rapid clicks share one editor
+
+print('== spawn lock ==')
+do
+  -- helper: the responding herdr stub shared by these cases
+  local function spawn_stub(s, name)
+    local d = H.mkdir(s.dir .. '/' .. name)
+    local log = s.dir .. '/' .. name .. '.log'
+    H.write_file(d .. '/herdr', ([[#!/bin/sh
+echo "$@" >> "%s"
+case "$1 $2" in
+  "pane list") echo '{"id":1,"result":{"panes":[]}}' ;;
+  "pane split") echo '{"id":2,"result":{"pane_id":"w1:p9"}}' ;;
+  "pane run") echo '{"id":3,"result":{}}' ;;
+  *) echo '{"id":9,"error":{"code":"stub_unhandled"}}' ;;
+esac
+]]):format(log))
+    uv.fs_chmod(d .. '/herdr', tonumber('755', 8))
+    return d, log
+  end
+  local ctx_of = function(s)
+    return vim.json.encode({ workspace_id = 'w1', focused_pane_id = 'w1:p1', workspace_cwd = s.work })
+  end
+
+  -- first spawn takes the lock and starts nvim on the registry socket
+  local s = scenario('slock')
+  H.lines_file(s.work .. '/f.txt', 20)
+  local stub, log = spawn_stub(s, 'stub')
+  local r = run_cli(s, { 'open', 'f.txt', '--json' }, {
+    path_prefix = stub,
+    env = { HERDR_PLUGIN_CONTEXT_JSON = ctx_of(s), HERDR_PLUGIN_ROOT = stub },
+  })
+  ok(r.code == 0 and (jdecode(r.stdout) or {}).spawned == true, 'slock: spawner exits 0 spawned', r.stdout)
+  local locks = vim.fn.glob(s.cache .. '/nvim/openloc/spawn-*.lock', true, true)
+  ok(#locks == 1, 'slock: spawn lock written', vim.inspect(locks))
+  local logged = slurp(log)
+  ok(logged:find('--listen', 1, true) ~= nil, 'slock: spawned nvim listens on a known socket', logged)
+  ok(logged:find('/openloc/ws%-w1') ~= nil or logged:find('openloc/ws%-w1') ~= nil,
+    'slock: the known socket is the workspace registry socket', logged)
+
+  -- fresh lock + live socket: the second click JOINS instead of splitting
+  local s2 = scenario('sjoin')
+  H.lines_file(s2.work .. '/f.txt', 20)
+  local stub2, log2 = spawn_stub(s2, 'stub')
+  local regdir = H.mkdir(s2.cache .. '/nvim/openloc')
+  local sock2 = regdir .. '/ws-w1.sock'
+  H.write_file(regdir .. '/spawn-ws-w1.lock', sock2 .. '\n0\n')
+  local _, up = H.spawn_nvim(sock2, { cwd = s2.work })
+  ok(up, 'sjoin: the "just spawned" editor is listening')
+  local r2 = run_cli(s2, { 'open', 'f.txt', '--line', '7', '--json' }, {
+    path_prefix = stub2,
+    env = { HERDR_PLUGIN_CONTEXT_JSON = ctx_of(s2), HERDR_PLUGIN_ROOT = stub2 },
+  })
+  local obj2 = jdecode(r2.stdout)
+  ok(r2.code == 0, 'sjoin: joiner exits 0', r2.code .. ' ' .. (r2.stderr or ''))
+  ok(obj2 and obj2.winner and obj2.winner.addr == sock2, 'sjoin: opened into the spawning editor', r2.stdout)
+  local logged2 = slurp(log2)
+  ok(logged2:find('pane split', 1, true) == nil, 'sjoin: no second split', logged2)
+  local pos = rpc_eval(sock2, 'expand("%:t") .. ":" .. line(".")')
+  ok(pos == 'f.txt:7', 'sjoin: file and line landed in the joined editor', tostring(pos))
+
+  -- stale lock: steal it and spawn
+  local s3 = scenario('sstale')
+  H.lines_file(s3.work .. '/f.txt', 20)
+  local stub3, log3 = spawn_stub(s3, 'stub')
+  local regdir3 = H.mkdir(s3.cache .. '/nvim/openloc')
+  local lock3 = regdir3 .. '/spawn-ws-w1.lock'
+  H.write_file(lock3, regdir3 .. '/ws-w1.sock\n0\n')
+  local past = os.time() - 60
+  uv.fs_utime(lock3, past, past)
+  local r3 = run_cli(s3, { 'open', 'f.txt', '--json' }, {
+    path_prefix = stub3,
+    env = { HERDR_PLUGIN_CONTEXT_JSON = ctx_of(s3), HERDR_PLUGIN_ROOT = stub3 },
+  })
+  ok(r3.code == 0 and (jdecode(r3.stdout) or {}).spawned == true,
+    'sstale: stale lock is stolen, spawn proceeds', r3.stdout)
+  ok(slurp(log3):find('pane split', 1, true) ~= nil, 'sstale: split happened')
+end
+
 -- Regression: a Darwin plugin-action env drops TMPDIR; discovery must fall
 -- back to the confstr temp dir where default sockets actually live.
 if uv.os_uname().sysname == 'Darwin' then
