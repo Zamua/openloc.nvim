@@ -1075,6 +1075,32 @@ esac
   ok(r3.code == 0 and (jdecode(r3.stdout) or {}).spawned == true,
     'sstale: stale lock is stolen, spawn proceeds', r3.stdout)
   ok(slurp(log3):find('pane split', 1, true) ~= nil, 'sstale: split happened')
+
+  -- Regression: a stealer must bind its own socket. Reusing the first
+  -- spawner's address makes the second nvim die with
+  -- "--listen: address already in use" when the first finally boots.
+  local s4 = scenario('suniq')
+  H.lines_file(s4.work .. '/f.txt', 20)
+  local stub4, log4 = spawn_stub(s4, 'stub')
+  local env4 = { HERDR_PLUGIN_CONTEXT_JSON = ctx_of(s4), HERDR_PLUGIN_ROOT = stub4 }
+  local r4a = run_cli(s4, { 'open', 'f.txt', '--json' }, { path_prefix = stub4, env = env4 })
+  ok(r4a.code == 0, 'suniq: first spawn ok', r4a.code)
+  local sock_a = slurp(log4):match("%-%-listen '([^']+)'")
+  local lock4 = vim.fn.glob(s4.cache .. '/nvim/openloc/spawn-*.lock', true, true)[1]
+  ok(sock_a ~= nil and lock4 ~= nil, 'suniq: first spawn recorded lock + socket')
+  local past4 = os.time() - 60
+  uv.fs_utime(lock4, past4, past4)
+  H.write_file(log4, '')
+  local r4b = run_cli(s4, { 'open', 'f.txt', '--json' }, { path_prefix = stub4, env = env4 })
+  ok(r4b.code == 0, 'suniq: second spawn ok', r4b.code)
+  local sock_b = slurp(log4):match("%-%-listen '([^']+)'")
+  ok(sock_b ~= nil and sock_a ~= sock_b,
+    'suniq: stealer binds a different socket than the first spawner',
+    tostring(sock_a) .. ' vs ' .. tostring(sock_b))
+  ok(slurp(lock4):find(vim.pesc(vim.fs.basename(sock_b))) ~= nil
+    or slurp(vim.fn.glob(s4.cache .. '/nvim/openloc/spawn-*.lock', true, true)[1] or lock4)
+      :find(vim.pesc(vim.fs.basename(sock_b))) ~= nil,
+    'suniq: the lock names the stealer socket so joiners follow it')
 end
 
 -- Regression: a Darwin plugin-action env drops TMPDIR; discovery must fall

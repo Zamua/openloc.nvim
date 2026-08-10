@@ -894,7 +894,7 @@ end
 -- A fresh spawn takes this long to publish its socket; rapid follow-up
 -- clicks inside the window join it instead of spawning another editor.
 local SPAWN_LOCK_FRESH_MS = 10000
-local SPAWN_JOIN_WAIT_MS = 3500
+local SPAWN_JOIN_WAIT_MS = 4000
 
 local function spawn_key(ctx, root)
   if ctx.workspace_id then
@@ -905,6 +905,13 @@ end
 
 local function spawn_lock_path(k)
   return key.registry_dir() .. '/spawn-' .. key.effective_key(k) .. '.lock'
+end
+
+-- Unique per attempt. Two spawners must never share a bind address: a
+-- stealer racing a slow-booting first spawner on one path ends with
+-- "--listen: address already in use" in the second editor.
+local function spawn_sock_path(k)
+  return key.socket_path(k .. '-s' .. uv.os_getpid())
 end
 
 -- Returns 'acquired' | 'fresh' | nil (unlockable dir). A stale lock is a
@@ -945,22 +952,33 @@ local function join_spawning_editor(state, lock, target, line, col)
   if type(sock) ~= 'string' or sock == '' then
     return false
   end
+  local function try_open()
+    if not uv.fs_stat(sock) then
+      return nil
+    end
+    local ack, status = remote.open_in(sock, target, line, col, clamp(state, remote.OPEN_DEADLINE_MS, 0))
+    if ack and ack.ok then
+      state.winner = { addr = sock, pid = ack.pid, score = 0, reasons = { 'joined a spawning editor' } }
+      return true
+    end
+    if status == 'wedged' then
+      return false
+    end
+    return nil
+  end
   local deadline = clamp(state, SPAWN_JOIN_WAIT_MS, RESERVE_OPEN_MS)
   local t0 = uv.hrtime()
   while (uv.hrtime() - t0) / 1e6 < deadline do
-    if uv.fs_stat(sock) then
-      local ack, status = remote.open_in(sock, target, line, col, clamp(state, remote.OPEN_DEADLINE_MS, 0))
-      if ack and ack.ok then
-        state.winner = { addr = sock, pid = ack.pid, score = 0, reasons = { 'joined a spawning editor' } }
-        return true
-      end
-      if status == 'wedged' then
-        return false
-      end
+    local r = try_open()
+    if r ~= nil then
+      return r
     end
     vim.wait(150)
   end
-  return false
+  -- Last chance before the caller steals and double-spawns: the first
+  -- editor often finishes booting right at the deadline.
+  vim.wait(300)
+  return try_open() == true
 end
 
 -- R9. Inside herdr: split a pane and run nvim with the local +call form
@@ -980,7 +998,7 @@ local function spawn_fallback(state, ctx, target, line, col, spawn_mode, root)
     local bin = herdr_bin()
     if bin then
       local k = spawn_key(ctx, root or vim.fs.dirname(target))
-      local sock = key.socket_path(k)
+      local sock = spawn_sock_path(k)
       local lock = spawn_lock_path(k)
       local got = take_spawn_lock(lock, sock)
       if got == 'fresh' then
