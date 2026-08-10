@@ -63,8 +63,9 @@ instructions:
 
 ```
 When you reference a source location, render it as a markdown link:
-[src/app.rs:42](https://openloc.invalid/o?p=src%2Fapp.rs&l=42)
-Percent-encode the p value and keep the display text as path:line.
+[src/app.rs:42](https://openloc.invalid/o?p=%2Fabs%2Fpath%2Fto%2Fsrc%2Fapp.rs&l=42)
+The p value is the absolute file path, percent-encoded. Keep the display
+text as the short workspace-relative path:line.
 ```
 
 Ctrl+click it in herdr and the link handler routes it to openloc.

@@ -1,7 +1,7 @@
 {
   "name": "openloc",
   "description": "Render source locations as openloc links so a Ctrl+click in the terminal jumps the workspace's running Neovim to that line. Companion to openloc.nvim.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": { "name": "Zamua" },
   "homepage": "https://github.com/Zamua/openloc.nvim",
   "repository": "https://github.com/Zamua/openloc.nvim",

@@ -8,7 +8,7 @@ cat <<'JSON'
 {
   "hookSpecificOutput": {
     "hookEventName": "SessionStart",
-    "additionalContext": "When you reference a source location, render it as a markdown link of the form [path:line](https://openloc.invalid/o?p=PATH&l=LINE), where PATH is the percent-encoded file path and LINE is the line number. Keep the display text as path:line. Example: [src/app.rs:42](https://openloc.invalid/o?p=src%2Fapp.rs&l=42)"
+    "additionalContext": "When you reference a source location, render it as a markdown link of the form [path:line](https://openloc.invalid/o?p=PATH&l=LINE), where PATH is the ABSOLUTE file path, percent-encoded, and LINE is the line number. Keep the display text as the short workspace-relative path:line. Example: [src/app.rs:42](https://openloc.invalid/o?p=%2Fhome%2Fme%2Fproj%2Fsrc%2Fapp.rs&l=42)"
   }
 }
 JSON
