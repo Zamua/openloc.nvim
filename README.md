@@ -5,8 +5,8 @@ already running for that workspace.
 
 ![Claude Code answers with a file link; Ctrl+click routes it to the running Neovim](demo/openloc-demo.gif)
 
-The recording is real: Claude Code answers with a file link, Ctrl+click in
-herdr fires it, openloc jumps the Neovim on the left to the line.
+Claude Code answers with a file link, Ctrl+click in herdr fires it, and
+openloc jumps the Neovim on the left to the line.
 
 ## Install
 
