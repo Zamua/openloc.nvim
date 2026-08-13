@@ -44,16 +44,6 @@ openloc jumps the Neovim on the left to the line.
 
 Clicking in herdr is **Ctrl+click** on every platform, including macOS.
 
-Optional keyboard entry point (paste into `~/.config/herdr/config.toml`):
-
-```toml
-[[keys.command]]
-key = "prefix+o"
-type = "shell"
-command = "herdr plugin action invoke openloc.pick"
-description = "openloc: open a file reference from this pane"
-```
-
 ## What it does
 
 openloc routes a `path:line` to the right Neovim among the ones already
