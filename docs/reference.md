@@ -41,23 +41,6 @@ without a usable popup the adapter falls back to the top candidate so a
 click never dead-ends. `--addr <socket>` skips the election entirely and
 forces that editor.
 
-## Optional: keyboard entry point
-
-Clicking is the primary path and needs no configuration. If you also want a
-mouse-free trigger (useful over SSH), bind the `pick` action yourself in
-`~/.config/herdr/config.toml`. Nothing installs this for you:
-
-```toml
-[[keys.command]]
-key = "prefix+o"
-type = "shell"
-command = "herdr plugin action invoke openloc.pick"
-description = "openloc: open a file reference from this pane"
-```
-
-`pick` scans the focused pane for file references, keeps only those that
-stat to a real file, and opens the newest.
-
 ## The URL form
 
 ```

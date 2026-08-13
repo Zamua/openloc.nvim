@@ -643,16 +643,10 @@ do
   local r = run_launcher({ 'open-url' }, { HERDR_PLUGIN_CLICKED_URL = '' })
   ok(r.code == 1, 'launcher: open-url without a URL exits 1 (usage)', r.code)
 
-  H.lines_file(s.work .. '/src.rs', 5)
-  local ptmp = H.mkdir(s.dir .. '/picktmp')
-  r = run_launcher({ 'pick' }, {
-    TMPDIR = ptmp,
-    OPENLOC_PICK_TEXT = 'error in src.rs:3',
-  })
-  ok(r.code == 2, 'launcher: pick routes into the CLI (exit 2, zero editors)',
+  -- unknown subcommands fall through to the CLI, which rejects them
+  r = run_launcher({ 'pick' }, {})
+  ok(r.code == 1, 'launcher: the removed pick subcommand is no longer handled',
     r.code .. ' ' .. (r.stderr or ''))
-  local leftover = vim.fn.glob(ptmp .. '/openloc-pick.*', true, true)
-  ok(#leftover == 0, 'launcher: pick helper removed before exec', vim.inspect(leftover))
 end
 
 -- ------------------------------------------------------------ list/doctor

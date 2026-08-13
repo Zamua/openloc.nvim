@@ -1,15 +1,9 @@
 id = "openloc"
 name = "openloc"
-version = "0.2.0"
+version = "0.3.0"
 min_herdr_version = "0.7.0"
 description = "Open file references in the Neovim that already belongs to the workspace"
 platforms = ["linux", "macos"]
-
-[[actions]]
-id = "pick"
-title = "Open a file reference from this pane"
-contexts = ["pane", "selection"]
-command = ["bash", "bin/openloc-herdr", "pick"]
 
 [[actions]]
 id = "open-url"
