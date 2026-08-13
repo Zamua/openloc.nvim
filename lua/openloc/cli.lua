@@ -808,6 +808,12 @@ local function emit(state, code, human, err)
       duration_ms = dur,
     }
     io.stdout:write(vim.json.encode(obj), '\n')
+    -- Failures also go to stderr under --json: callers capture stdout for
+    -- the machine-readable object, and an empty stderr leaves a toast or a
+    -- log with nothing but an exit code.
+    if err then
+      io.stderr:write('openloc: ', err, '\n')
+    end
   else
     if human and human ~= '' then
       io.stdout:write(human, '\n')

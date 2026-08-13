@@ -992,6 +992,22 @@ do
 end
 
 
+-- ---------------------------------- --json failures still reach stderr
+
+print('== json failures reach stderr ==')
+do
+  -- The herdr launcher always passes --json and captures stdout, so an
+  -- error that lives only in the JSON leaves the toast with just an exit
+  -- code. Failures must appear on stderr in both output modes.
+  local s = scenario('jsonerr')
+  local r = run_cli(s, { 'open', 'nope-xyz.txt', '--spawn', 'never', '--json' })
+  ok(r.code == 3, 'jsonerr: missing file still exits 3', r.code)
+  local obj = jdecode(r.stdout)
+  ok(obj and obj.error ~= nil, 'jsonerr: the JSON still carries the error', r.stdout)
+  ok((r.stderr or ''):find('not an existing regular file', 1, true) ~= nil,
+    'jsonerr: --json failures also write the reason to stderr', vim.inspect(r.stderr))
+end
+
 -- ------------------------------------ R9 spawn lock: rapid clicks share one editor
 
 print('== spawn lock ==')
