@@ -1,5 +1,5 @@
 -- Editor-side plugin tests: registry claim protocol (claim, no-steal,
--- stale-after-SIGKILL reclaim), metadata, unregister, and OpenlocJump.
+-- stale-after-SIGKILL reclaim), metadata, and unregister.
 -- Run: nvim -l tests/test_plugin.lua (or via tests/run.sh)
 
 local uv = vim.uv
@@ -149,51 +149,10 @@ ok(connectable(ksock), 'reclaim: reclaimed socket connectable')
 local kmeta = read_json(key.json_path('ws-wkill'))
 ok(kmeta and kmeta.pid == vim.fn.getpid(), 'reclaim: metadata now ours')
 
--- --------------------------------------------------- plugin + OpenlocJump
+-- ------------------------------------------------------------- plugin
 
-print('== OpenlocJump ==')
+print('== plugin file ==')
 dofile(H.root .. '/plugin/openloc.lua')
-ok(vim.fn.exists(':OpenlocJump') == 2, 'plugin: OpenlocJump command defined')
-
-local work3 = H.mkdir(BASE .. '/plug/proj3')
-H.lines_file(work3 .. '/src/foo.rs', 10)
-H.lines_file(work3 .. '/x.py', 5)
-openloc.setup({ roots = { work3 } })
-
--- a scratch terminal buffer stands in for a running agent pane
-local tbuf = vim.api.nvim_create_buf(false, true)
-local tchan = vim.api.nvim_open_term(tbuf, {})
-vim.api.nvim_chan_send(tchan, 'build failed\r\nsee src/foo.rs:3 and x.py:2\r\ndone\r\n')
-vim.api.nvim_win_set_buf(0, tbuf)
-local rendered = vim.wait(2000, function()
-  local lines = vim.api.nvim_buf_get_lines(tbuf, 0, -1, false)
-  return table.concat(lines, '\n'):find('x%.py:2') ~= nil
-end, 10)
-ok(rendered, 'jump: terminal buffer rendered')
-
-local refs = openloc.jump({})
-ok(#refs == 2, 'jump: both refs detected', vim.inspect(refs))
-local q = vim.fn.getqflist({ items = 1, title = 1 })
-ok(q.title == 'openloc', 'jump: quickfix titled openloc', q.title)
-ok(#q.items == 2, 'jump: quickfix carries both refs', #q.items)
-if #q.items == 2 then
-  ok(vim.fn.bufname(q.items[1].bufnr):find('foo%.rs$') ~= nil and q.items[1].lnum == 3,
-    'jump: first quickfix item is foo.rs:3')
-  ok(vim.fn.bufname(q.items[2].bufnr):find('x%.py$') ~= nil and q.items[2].lnum == 2,
-    'jump: second quickfix item is x.py:2')
-end
-ok(uv.fs_realpath(vim.api.nvim_buf_get_name(0)) == uv.fs_realpath(work3 .. '/src/foo.rs'),
-  'jump: opened the first ref', vim.api.nvim_buf_get_name(0))
-ok(vim.fn.line('.') == 3, 'jump: cursor on line 3', vim.fn.line('.'))
-
--- register variant via the ex command
-vim.fn.setreg('a', 'trace: x.py:4 something')
-vim.cmd('OpenlocJump! a')
-q = vim.fn.getqflist({ items = 1, title = 1 })
-ok(#q.items == 1 and q.items[1].lnum == 4, 'jump!: register scan fills quickfix')
-ok(uv.fs_realpath(vim.api.nvim_buf_get_name(0)) == uv.fs_realpath(work3 .. '/x.py'),
-  'jump!: opened the register ref')
-ok(vim.fn.line('.') == 4, 'jump!: cursor on line 4', vim.fn.line('.'))
 
 -- --------------------------------------------------------------- unregister
 

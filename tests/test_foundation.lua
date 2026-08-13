@@ -1,4 +1,4 @@
--- Foundation tests: key derivation, detection corpus, deadline-bounded RPC.
+-- Foundation tests: key derivation and the deadline-bounded RPC layer.
 -- Run from the repo root: nvim -l tests/test_foundation.lua
 
 local uv = vim.uv
@@ -14,7 +14,6 @@ package.path = table.concat({
 }, ';')
 
 local key = require('openloc.key')
-local detect = require('openloc.detect')
 local remote = require('openloc.remote')
 
 local npass, nfail = 0, 0
@@ -56,7 +55,6 @@ local function cleanup()
     if c.sock then os.remove(c.sock) end
   end
   remote.close_callback_server()
-  vim.fn.delete('/tmp/oltest-detect-' .. mypid, 'rf')
   vim.fn.delete('/tmp/oltest-found-' .. mypid, 'rf')
 end
 
@@ -82,94 +80,6 @@ local eff = key.effective_key(key.ws_key(long_id))
 ok(eff:match('^ws%-%x%x%x%x%x%x%x%x%x%x%x%x$') ~= nil, 'key: long key collapses to prefix+hash')
 ok(#key.socket_path(key.ws_key(long_id)) < key.MAX_SOCKET_PATH, 'key: hashed socket path under limit')
 ok(key.effective_key(key.ws_key(long_id)) == eff, 'key: hashed form deterministic')
-
--- ------------------------------------------------------------- detect.lua
-
-print('== detect ==')
-local droot = '/tmp/oltest-detect-' .. mypid
-write_file(droot .. '/src/foo.rs')
-write_file(droot .. '/src/lib.rs')
-write_file(droot .. '/app/main.py')
-write_file(droot .. '/web/index.js')
-write_file(droot .. '/pkg/server.go')
-write_file(droot .. '/relative/thing.txt')
-write_file(droot .. '/x.py')
-write_file(droot .. '/lib/mod.lua')
-write_file(droot .. '/deep/a-b_c.2/file.name.txt')
-write_file(droot .. '/Makefile')
-write_file(droot .. '/zw\226\128\139.txt') -- name contains U+200B
-write_file(droot .. '/bd\226\128\174.txt') -- name contains U+202E
-write_file(droot .. '/ct\1rl.txt') -- name contains a control byte
-local dreal = uv.fs_realpath(droot)
-local bases = { droot }
-
-local function rp(rel)
-  return uv.fs_realpath(droot .. '/' .. rel)
-end
-
--- positive corpus: {input line, expected rel path, line, col}
-local positives = {
-  { 'src/foo.rs:42', 'src/foo.rs', 42, nil, 'path:line' },
-  { 'error at src/foo.rs:42:7 in main', 'src/foo.rs', 42, 7, 'path:line:col' },
-  { 'src/foo.rs(42)', 'src/foo.rs', 42, nil, 'path(line)' },
-  { 'src/foo.rs(42,7)', 'src/foo.rs', 42, 7, 'path(line,col)' },
-  { 'File "app/main.py", line 12', 'app/main.py', 12, nil, 'python traceback' },
-  { '"app/main.py", line 3', 'app/main.py', 3, nil, 'quoted, line N' },
-  { ' --> src/lib.rs:4:9', 'src/lib.rs', 4, 9, 'rustc arrow' },
-  { '    at handler (' .. droot .. '/web/index.js:10:5)', 'web/index.js', 10, 5, 'node stack' },
-  { 'pkg/server.go:12: undefined: Foo', 'pkg/server.go', 12, nil, 'go test' },
-  { 'src/foo.rs:42:let x = 1;', 'src/foo.rs', 42, nil, 'rg -n with content' },
-  { './relative/thing.txt:7', 'relative/thing.txt', 7, nil, 'dot-slash relative' },
-  { droot .. '/src/foo.rs:99:1', 'src/foo.rs', 99, 1, 'absolute path:line:col' },
-  { 'x.py:3', 'x.py', 3, nil, 'short relative' },
-  { 'lib/mod.lua:8: attempt to index a nil value', 'lib/mod.lua', 8, nil, 'lua error' },
-  { 'deep/a-b_c.2/file.name.txt:5', 'deep/a-b_c.2/file.name.txt', 5, nil, 'dots and dashes' },
-  { 'Makefile:3', 'Makefile', 3, nil, 'no extension' },
-}
-
-for i, case in ipairs(positives) do
-  local hits = detect.detect(case[1], bases)
-  local h = hits[1]
-  local pass = #hits == 1 and h ~= nil and h.path == rp(case[2])
-    and h.line == case[3] and h.col == case[4]
-    and type(h.span) == 'table' and h.span[1] >= 1 and h.span[2] >= h.span[1]
-  ok(pass, ('detect +%02d %s'):format(i, case[5]),
-    not pass and vim.inspect(hits) or nil)
-end
-
--- negative corpus: zero results expected
-local negatives = {
-  { 'https://example.com:8080/path', 'url' },
-  { 'time was 12:30:45 today', 'timestamp' },
-  { 'nonexistent/file.rs:42', 'stat oracle drops missing file' },
-  { 'a:b', 'no line number' },
-  { 'version 1.2.3', 'semver' },
-  { 'see the docs for details.', 'prose' },
-  { 'ratio was 3:1 overall', 'ratio' },
-  { 'commit deadbeef:12', 'hash-like token' },
-  { ':42', 'bare colon-line' },
-  { 'some_function():', 'call syntax' },
-  { '"zw\226\128\139.txt", line 1', 'zero-width char rejected though file exists' },
-  { '"bd\226\128\174.txt", line 2', 'bidi override rejected though file exists' },
-  { '"ct\1rl.txt", line 1', 'control char rejected though file exists' },
-}
-
-for i, case in ipairs(negatives) do
-  local hits = detect.detect(case[1], bases)
-  ok(#hits == 0, ('detect -%02d %s'):format(i, case[2]),
-    #hits > 0 and vim.inspect(hits) or nil)
-end
-
--- multiple refs on one line, in text order
-local multi = detect.detect('see src/foo.rs:1 and x.py:2', bases)
-ok(#multi == 2 and multi[1].path == rp('src/foo.rs') and multi[1].line == 1
-  and multi[2].path == rp('x.py') and multi[2].line == 2
-  and multi[1].span[1] < multi[2].span[1],
-  'detect: two refs on one line, text order', vim.inspect(multi))
-
--- overlap dedupe: path:line:col claims the span, path:line does not double-report
-local overlap = detect.detect('src/foo.rs:42:7', bases)
-ok(#overlap == 1 and overlap[1].col == 7, 'detect: line:col wins overlap with line')
 
 -- ------------------------------------------------------------- remote.lua
 

@@ -37,11 +37,3 @@ vim.api.nvim_create_autocmd('VimLeavePre', {
     end
   end,
 })
-
-vim.api.nvim_create_user_command('OpenlocJump', function(o)
-  require('openloc').jump({ bang = o.bang, reg = o.args })
-end, {
-  bang = true,
-  nargs = '?',
-  desc = 'Scan visible terminals for file references (with ! scan a register, default +), fill quickfix, jump to the first',
-})
