@@ -47,9 +47,16 @@ forces that editor.
 https://openloc.invalid/o?p=<path>&l=<line>&c=<col>&ws=<workspace id>&cwd=<base dir>
 ```
 
-Only `p` is required; `p` and `cwd` are percent encoded. `openloc.invalid`
-never resolves, so a stray click without the handler is a DNS error page.
-Non-http(s) URLs are rejected.
+Only `p` is required. It takes an absolute path, or one relative to a
+click-time base: the herdr worktree checkout, the workspace cwd, the focused
+pane cwd, or `cwd`. It may also carry the location inline as
+`<path>:<line>[:<col>]`, making `l` and `c` redundant. Percent encoding is
+needed only for characters the query grammar claims, `?` `#` `&` `%` and
+space; a plain `/` is legal and needs no escape. Prefer the shortest spelling
+that resolves, because a terminal soft-wraps a long URL and a link matcher
+reading wrapped cells then sees a fragment. `openloc.invalid` never resolves,
+so a stray click without the handler is a DNS error page. Non-http(s) URLs
+are rejected.
 
 ## Making an agent emit clickable refs
 
@@ -62,13 +69,16 @@ Any other agent, or without the plugin, add one line to the agent's
 instructions:
 
 ```
-When you reference a source location, render it as a markdown link:
-[src/app.rs:42](https://openloc.invalid/o?p=%2Fabs%2Fpath%2Fto%2Fsrc%2Fapp.rs&l=42)
-The p value is the absolute file path, percent-encoded. Keep the display
-text as the short workspace-relative path:line.
+When you reference a source location, render it as a markdown link whose
+display text and p value are the SAME string:
+[apps/web/src/app.ts:42](https://openloc.invalid/o?p=apps/web/src/app.ts:42)
+PATH is the path as it resolves from the current working directory, or an
+absolute path. Spell it exactly as it appears in tool output: do not
+percent-encode it, do not abbreviate it, and do not shorten the display text.
 ```
 
-Ctrl+click it in herdr and the link handler routes it to openloc.
+Ctrl+click it in herdr and the link handler routes it to openloc. One string
+written twice, with nothing to derive and nothing to keep in sync.
 
 ## Terminal adapters
 
