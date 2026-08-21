@@ -160,9 +160,11 @@ function M.claims()
   return out
 end
 
--- Open target in this instance: tab drop (never :edit, which E37s under
--- 'nohidden'), clamp line and col instead of erroring, zv unfolds, zz
--- centers. Never creates the target.
+-- Open target in this instance: drop into the current window, reusing a
+-- window already showing it. The hide modifier keeps a modified current
+-- buffer from E37ing under 'nohidden'; it stays loaded and listed. Clamp
+-- line and col instead of erroring, zv unfolds, zz centers. Never creates
+-- the target.
 function M.open(path, line, col)
   line = tonumber(line)
   col = tonumber(col)
@@ -177,7 +179,7 @@ function M.open(path, line, col)
   end
   target = rp
   local ok, err = pcall(function()
-    vim.cmd('tab drop ' .. vim.fn.fnameescape(target))
+    vim.cmd('hide drop ' .. vim.fn.fnameescape(target))
     local last = vim.api.nvim_buf_line_count(0)
     local l = math.min(math.max(line or 1, 1), last)
     local text = (vim.api.nvim_buf_get_lines(0, l - 1, l, false)[1]) or ''

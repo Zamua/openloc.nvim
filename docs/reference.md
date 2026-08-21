@@ -97,7 +97,7 @@ root. The CLI stats the target (never creates it), probes registry and
 discovered sockets with deadline-bounded RPC, drops everything belonging to
 another herdr session, filters what is left by the workspace's live pane map
 when herdr is available, scores the rest (workspace match, file already open,
-root ancestry, git root, cwd), then `tab drop` with line clamp. Stock Neovims
+root ancestry, git root, cwd), then `hide drop` with line clamp. Stock Neovims
 without the plugin work through the same inlined open.
 
 Session scope comes first because herdr runs one server per named session and
