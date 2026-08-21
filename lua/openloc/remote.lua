@@ -81,13 +81,15 @@ end
 if vim.in_fast_event() then vim.schedule(run) else run() end
 ]]
 
--- Runs inside the winner. tab drop, never :edit (E37 under nohidden); clamp
--- line and col rather than error; zv unfolds, zz centers.
+-- Runs inside the winner. drop into the current window, reusing a window
+-- already showing the target; the hide modifier keeps a modified current
+-- buffer from E37ing under 'nohidden'. Clamp line and col rather than
+-- error; zv unfolds, zz centers.
 M.OPEN_SRC = [[
 local cli_sock, token, target, line, col = ...
 local function run()
   local ok, err = pcall(function()
-    vim.cmd('tab drop ' .. vim.fn.fnameescape(target))
+    vim.cmd('hide drop ' .. vim.fn.fnameescape(target))
     local last = vim.api.nvim_buf_line_count(0)
     local l = math.min(math.max(line or 1, 1), last)
     local text = (vim.api.nvim_buf_get_lines(0, l - 1, l, false)[1]) or ''
