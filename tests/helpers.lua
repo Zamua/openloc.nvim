@@ -44,6 +44,11 @@ function M.lines_file(p, n)
 end
 
 M.children = {}
+-- Pids this process did not fork itself, so vim.system holds no handle for
+-- them: a grandchild is orphaned rather than reaped when its parent is
+-- SIGKILLed, and a headless nvim left listening on a default socket is
+-- discoverable by any later real click.
+M.orphans = {}
 
 -- Spawned pids also go to $OLTEST_PIDFILE so the run.sh trap can reap them
 -- if the test process dies before its own cleanup.
@@ -140,6 +145,8 @@ function M.spawn_nvim_under(fake_bin, sock, opts)
       local ok2, got = pcall(vim.fn.rpcrequest, chan, 'nvim_eval', 'getpid()')
       if ok2 then
         pid = got
+        M.orphans[#M.orphans + 1] = pid
+        note_pid(pid)
       end
       pcall(vim.fn.chanclose, chan)
     end
@@ -167,7 +174,11 @@ function M.cleanup()
       c:kill(9)
     end)
   end
+  for _, pid in ipairs(M.orphans) do
+    pcall(uv.kill, pid, 9)
+  end
   M.children = {}
+  M.orphans = {}
 end
 
 function M.summary(extra_dirs)
