@@ -2,7 +2,8 @@
 -- runtimepath, no init.lua); the entry script performs the R-1 self-unpublish
 -- before this file loads. Implements R0 (stat oracle + confinement), R1-R3
 -- (registry fast paths), R4 (candidate union), R5 (deadline-bounded probes),
--- R6 (live workspace filter), R7 (scoring), R8 (open), R9 (spawn fallback),
+-- R6 (session scope + live workspace filter), R7 (scoring), R8 (open),
+-- R9 (spawn fallback),
 -- R10 (focus). No step may block past the global wall-clock cap.
 
 -- Under nvim -l require() cannot see this repo; resolve it from this file.
@@ -40,9 +41,10 @@ local DEFAULT_PICK_MARGIN = 75
 
 local USAGE = table.concat({
   'usage: nvim -l bin/openloc <command> [args]',
-  '  open <path>[:line[:col]] [--ws ID] [--cwd PATH] [--line N] [--col N] [--addr SOCKET]',
-  '       [--choose auto|never] [--json] [--spawn split|never]',
-  '  open-url <url> [--strict] [--addr SOCKET] [--choose auto|never] [--json] [--spawn split|never]',
+  '  open <path>[:line[:col]] [--ws ID] [--session PID] [--cwd PATH] [--line N] [--col N]',
+  '       [--addr SOCKET] [--choose auto|never] [--json] [--spawn split|never]',
+  '  open-url <url> [--strict] [--addr SOCKET] [--session PID] [--choose auto|never] [--json]',
+  '       [--spawn split|never]',
   '  list [--json]',
   '  doctor',
 }, '\n') .. '\n'
@@ -243,6 +245,8 @@ local function parse_flags(argv, i0)
       flags.strict = true
     elseif a == '--ws' then
       flags.ws = value(a)
+    elseif a == '--session' then
+      flags.session = value(a)
     elseif a == '--cwd' then
       flags.cwd = value(a)
     elseif a == '--line' then
@@ -288,6 +292,7 @@ local function build_ctx(flags, url)
   end
   local url_ws = url and url.params.ws
   ctx.workspace_id = flags.ws or url_ws or plug.workspace_id or getenv('HERDR_WORKSPACE_ID')
+  ctx.session = tonumber(flags.session) or flags.session
   ctx.workspace_cwd = plug.workspace_cwd
   ctx.focused_pane_cwd = plug.focused_pane_cwd
   ctx.focused_pane_id = plug.focused_pane_id or getenv('HERDR_PANE_ID')
@@ -590,6 +595,82 @@ local function probe_all_candidates(state, target)
   end
 end
 
+-- --------------------------------------------------------- R6 session scope
+
+-- herdr runs one server per named session and each server numbers its own
+-- workspaces from scratch, so `w4` in one session and `w4` in another are
+-- unrelated panes. Comparing HERDR_WORKSPACE_ID across sessions is therefore
+-- meaningless, and `herdr pane list` only ever answers for one session, which
+-- leaves every editor in a sibling session unresolvable by the live map.
+--
+-- A pane's processes descend from the server that owns them, so the first
+-- herdr ancestor of a pid identifies its session without asking herdr
+-- anything. Comparing those pids is what makes the workspace ids comparable.
+local PROC_WALK_MAX = 40
+
+-- The server's process name, which a renamed or wrapped install changes.
+local function server_comm()
+  local bin = herdr_bin()
+  local base = bin and bin:match('([^/]+)$')
+  if base and base ~= '' then
+    return base
+  end
+  return 'herdr'
+end
+
+local function build_proc_table(state)
+  if state.procs ~= nil then
+    return state.procs or nil
+  end
+  local out = run_cmd(state, { 'ps', '-A', '-o', 'pid=,ppid=,ucomm=' }, HERDR_CALL_MS, RESERVE_OPEN_MS)
+  if not out then
+    -- false, not nil: a failed probe must not be retried on every candidate.
+    state.procs = false
+    return nil
+  end
+  local want = server_comm()
+  local ppid, herdr = {}, {}
+  for line in out:gmatch('[^\n]+') do
+    local pid, par, comm = line:match('^%s*(%d+)%s+(%d+)%s+(.-)%s*$')
+    if pid then
+      pid, par = tonumber(pid), tonumber(par)
+      ppid[pid] = par
+      if comm == want or comm == 'herdr' then
+        herdr[pid] = true
+      end
+    end
+  end
+  state.procs = { ppid = ppid, herdr = herdr }
+  return state.procs
+end
+
+-- The session-owning server's pid, or nil when the pid is dead or lives
+-- outside herdr entirely. nil means "unknown", never "same session".
+local function session_of(procs, pid)
+  if not procs or type(pid) ~= 'number' then
+    return nil
+  end
+  local cur, depth = procs.ppid[pid] and pid or nil, 0
+  while cur and cur > 1 and depth < PROC_WALK_MAX do
+    if procs.herdr[cur] then
+      return cur
+    end
+    cur = procs.ppid[cur]
+    depth = depth + 1
+  end
+  return nil
+end
+
+local function current_session(state, ctx)
+  if ctx and ctx.session then
+    return ctx.session
+  end
+  if state.session == nil then
+    state.session = session_of(build_proc_table(state), vim.fn.getpid()) or false
+  end
+  return state.session or nil
+end
+
 -- ----------------------------------------------------------------- R6 live
 
 -- The full pane list is fetched rather than --workspace-filtered: confirming
@@ -607,14 +688,11 @@ local function build_live_map(state, ctx)
   if not res or type(res.panes) ~= 'table' then
     return nil
   end
-  local out = run_cmd(state, { 'ps', '-A', '-o', 'pid=,ppid=' }, HERDR_CALL_MS, RESERVE_LIVEMAP_MS)
-  if not out then
+  local procs = build_proc_table(state)
+  if not procs then
     return nil
   end
-  local ppid = {}
-  for pid, par in out:gmatch('(%d+)%s+(%d+)') do
-    ppid[tonumber(pid)] = tonumber(par)
-  end
+  local ppid = procs.ppid
   local panes = {}
   for _, p in ipairs(res.panes) do
     if #panes >= 24 or remaining_ms(state) <= RESERVE_LIVEMAP_MS then
@@ -669,6 +747,21 @@ local function score_candidate(state, c, ctx, target, target_git, live)
     c.excluded = true
     reasons[#reasons + 1] = 'excluded: only term:// buffers'
     return
+  end
+  -- Session scope outranks every workspace signal: a link clicked in one
+  -- session must never open in another, and an id match across sessions is
+  -- a coincidence of two independent counters rather than evidence.
+  local mine = current_session(state, ctx)
+  if mine then
+    local theirs = session_of(build_proc_table(state), p.pid)
+    if theirs and theirs ~= mine then
+      c.excluded = true
+      c.session = theirs
+      reasons[#reasons + 1] = 'excluded: another herdr session (server pid ' .. tostring(theirs) .. ')'
+      c.score = score
+      return
+    end
+    c.session = theirs
   end
   if ctx.workspace_id then
     local pane = live and p.pid and live_lookup(live, p.pid) or nil
@@ -774,6 +867,7 @@ local function candidate_json(state)
       score = c.score,
       ws = p.ws,
       cwd = p.cwd,
+      session = c.session,
       wedged = c.status == 'wedged',
       excluded = c.excluded,
       status = c.status,
@@ -801,6 +895,7 @@ local function emit(state, code, human, err)
         reasons = w.reasons,
       } or nil,
       candidates = candidate_json(state),
+      session = state.session or nil,
       live_map_used = state.live_map_used,
       focused = state.focused,
       spawned = state.spawned,
@@ -840,6 +935,7 @@ local function emit_ambiguous(state, eligible, margin)
         score = c.score,
         cwd = p.cwd,
         ws = p.ws,
+        session = c.session,
         reasons = c.reasons,
       }
     end
@@ -1229,10 +1325,11 @@ local function cmd_list(state, argv)
     local c = state.cands[addr]
     local p = c.payload or {}
     io.stdout:write(string.format(
-      '%-8s %-9s pid=%-8s ws=%-8s score=%-5d cwd=%s addr=%s%s\n',
+      '%-8s %-9s pid=%-8s sess=%-8s ws=%-8s score=%-5d cwd=%s addr=%s%s\n',
       c.status or '?',
       c.origin,
       tostring(p.pid or '-'),
+      tostring(c.session or '-'),
       tostring(p.ws or '-'),
       c.score,
       tostring(p.cwd or '-'),
@@ -1303,6 +1400,13 @@ local function cmd_doctor(state)
     line('ok', 'herdr: ' .. bin .. ' (' .. (v and v:gsub('%s+$', '') or 'version unknown') .. ')')
   else
     line('warn', 'herdr: not found (live workspace filter and pane spawn unavailable)')
+  end
+  local sess = current_session(state)
+  if sess then
+    line('ok', 'herdr session: server pid ' .. tostring(sess)
+      .. ' (editors under other servers are excluded)')
+  else
+    line('warn', 'herdr session: no herdr server ancestor; sibling sessions cannot be excluded')
   end
   io.stdout:write(table.concat(out, '\n'), '\n')
   return EXIT.ok
