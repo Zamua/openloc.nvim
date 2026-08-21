@@ -7,7 +7,7 @@ The front-page README covers install and the demo. Everything else is here.
 Zero-dependency Lua, executed by Neovim itself:
 
 ```
-nvim -l bin/openloc open <path>[:line[:col]] [--ws ID] [--cwd PATH] [--addr SOCKET] [--choose auto|never] [--json] [--spawn split|never]
+nvim -l bin/openloc open <path>[:line[:col]] [--ws ID] [--session PID] [--cwd PATH] [--addr SOCKET] [--choose auto|never] [--json] [--spawn split|never]
 nvim -l bin/openloc open-url <url>
 nvim -l bin/openloc list [--json]
 nvim -l bin/openloc doctor
@@ -94,10 +94,20 @@ written twice, with nothing to derive and nothing to keep in sync.
 
 Plugin-loaded Neovims register a socket keyed by workspace id and project
 root. The CLI stats the target (never creates it), probes registry and
-discovered sockets with deadline-bounded RPC, filters by the workspace's
-live pane map when herdr is available, scores the rest (workspace match,
-file already open, root ancestry, git root, cwd), then `tab drop` with line
-clamp. Stock Neovims without the plugin work through the same inlined open.
+discovered sockets with deadline-bounded RPC, drops everything belonging to
+another herdr session, filters what is left by the workspace's live pane map
+when herdr is available, scores the rest (workspace match, file already open,
+root ancestry, git root, cwd), then `tab drop` with line clamp. Stock Neovims
+without the plugin work through the same inlined open.
+
+Session scope comes first because herdr runs one server per named session and
+each server numbers its workspaces from `w1` independently, so `w4` in one
+session and `w4` in another name unrelated panes, and `herdr pane list` only
+ever answers for one session. A pane's processes descend from the server that
+owns them, so the nearest `herdr` ancestor of a pid identifies its session
+without asking herdr anything; `--session PID` overrides that reading. Without
+it, five editors in a sibling session read as five plausible candidates and
+raise the chooser instead of letting the spawn fallback open one here.
 
 ## Troubleshooting
 
@@ -106,6 +116,11 @@ clamp. Stock Neovims without the plugin work through the same inlined open.
 - `herdr plugin log list --plugin openloc`: what an action printed.
 - A Neovim parked at a hit-enter or swapfile prompt answers no RPC: openloc
   reports it wedged (exit 5) instead of hanging. Press enter there, retry.
+- A chooser offering editors from workspaces you do not recognise means those
+  editors belong to another herdr session. `openloc list` prints `sess=` per
+  candidate and `openloc doctor` prints the session it resolved for itself;
+  a `-` in either means no `herdr` ancestor was found, and sibling sessions
+  cannot be told apart.
 - No failure toasts appear: herdr renders toasts only when toast delivery is
   enabled in `~/.config/herdr/config.toml`:
 

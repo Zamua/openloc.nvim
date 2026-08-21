@@ -428,6 +428,46 @@ fi
   ok(c and has_reason(c, 'live map places it in w9'), 'live: exclusion reason names the workspace')
 end
 
+-- --------------------- regression (d): sibling herdr session (R6 scope)
+
+-- herdr numbers workspaces per session, so an editor under another session's
+-- server is out of scope no matter what its HERDR_WORKSPACE_ID says, and
+-- `herdr pane list` cannot see it to say otherwise.
+print('== herdr session scope ==')
+do
+  local s = scenario('session')
+  H.lines_file(s.work .. '/f.txt', 20)
+  local fake = H.fake_herdr_bin(s.dir .. '/fakebin')
+  ok(fake ~= nil, 'sess: stand-in session server binary created')
+
+  local sock = s.glob_sock()
+  local other, up = H.spawn_nvim_under(fake, sock, { cwd = s.work })
+  ok(up, 'sess: candidate under the stand-in server came up')
+  local server = other.wrapper.pid
+
+  -- Same workspace id in both sessions: the collision the pid comparison is
+  -- there to catch, since each server counts workspaces from w1 on its own.
+  local r = run_cli(s, { 'open', 'f.txt', '--ws', 'w1', '--session', tostring(server + 1000000),
+    '--choose', 'auto', '--spawn', 'never', '--json' })
+  local obj = jdecode(r.stdout)
+  ok(r.code == 2, 'sess: nothing eligible, exits 2 (no editor) not 6 (ambiguous)',
+    r.code .. ' ' .. (r.stderr or ''))
+  local c2 = find_cand(obj, 'pid', other.pid)
+  ok(c2 ~= nil, 'sess: the sibling-session candidate is still listed', r.stdout)
+  ok(c2 and c2.excluded == true, 'sess: sibling-session candidate excluded')
+  ok(c2 and has_reason(c2, 'another herdr session'), 'sess: reason names the session')
+  ok(c2 and c2.session == server, 'sess: the reported session is the stand-in server', c2 and c2.session)
+
+  -- Same editor, same session: eligibility is restored, so the exclusion is
+  -- scoped to the session and is not just a blanket rejection.
+  local r2 = run_cli(s, { 'open', 'f.txt:7', '--ws', 'w1', '--session', tostring(server),
+    '--spawn', 'never', '--json' })
+  local obj2 = jdecode(r2.stdout)
+  ok(r2.code == 0, 'sess: same-session candidate is eligible and opens',
+    r2.code .. ' ' .. (r2.stderr or ''))
+  ok(obj2 and obj2.winner and obj2.winner.pid == other.pid, 'sess: it won the election')
+end
+
 -- ---------------------------------------------------------- open-url (R0)
 
 print('== open-url ==')

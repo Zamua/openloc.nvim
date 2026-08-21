@@ -82,6 +82,71 @@ function M.spawn_nvim(sock, opts)
   return obj, up
 end
 
+-- A process whose name is `herdr`, standing in for a session server. Hardlink
+-- first: macOS takes a process's reported name from the executable's own
+-- directory entry, so the link name is the name ps reports, while a copy of a
+-- signed platform binary such as /bin/sh is SIGKILLed on exec. The fallback
+-- copy covers a tests dir on another filesystem.
+function M.fake_herdr_bin(dir)
+  local path = dir .. '/herdr'
+  if uv.fs_stat(path) then
+    return path
+  end
+  M.mkdir(dir)
+  if not uv.fs_link(vim.v.progpath, path) then
+    local src = io.open(vim.v.progpath, 'rb')
+    if not src then
+      return nil
+    end
+    local dst = io.open(path, 'wb')
+    if not dst then
+      src:close()
+      return nil
+    end
+    dst:write(src:read('*a'))
+    src:close()
+    dst:close()
+    uv.fs_chmod(path, tonumber('755', 8))
+  end
+  return path
+end
+
+-- A candidate editor whose nearest `herdr` ancestor is fake_bin, i.e. one
+-- that belongs to a different session than anything this test spawns
+-- directly. The wrapper stays alive so the ancestry stays walkable.
+function M.spawn_nvim_under(fake_bin, sock, opts)
+  opts = opts or {}
+  vim.fn.mkdir(vim.fs.dirname(sock), 'p')
+  local argv = { vim.v.progpath, '--headless', '--clean', '--listen', sock }
+  for _, a in ipairs(opts.args or {}) do
+    argv[#argv + 1] = a
+  end
+  local spec = vim.inspect(argv, { newline = ' ', indent = '' })
+  local lua = ('vim.system(%s); vim.uv.sleep(%d)'):format(spec, opts.hold_ms or 30000)
+  -- An explicit --listen keeps the wrapper off the default socket path, so
+  -- glob discovery never offers this scaffolding as a candidate.
+  local wrapper = M.spawn({
+    fake_bin, '--headless', '--clean',
+    '--listen', vim.fs.dirname(sock) .. '/wrapper-' .. tostring(uv.os_getpid()) .. '.sock',
+    '-c', 'lua ' .. lua,
+  }, opts)
+  local up = vim.wait(8000, function()
+    return uv.fs_stat(sock) ~= nil
+  end, 10)
+  local pid = nil
+  if up then
+    local ok, chan = pcall(vim.fn.sockconnect, 'pipe', sock, { rpc = true })
+    if ok and chan and chan ~= 0 then
+      local ok2, got = pcall(vim.fn.rpcrequest, chan, 'nvim_eval', 'getpid()')
+      if ok2 then
+        pid = got
+      end
+      pcall(vim.fn.chanclose, chan)
+    end
+  end
+  return { wrapper = wrapper, pid = pid }, up and pid ~= nil
+end
+
 -- Block a candidate's main loop; its listen socket keeps accepting connects
 -- but nothing answers, the observable state of a hit-enter or swapfile
 -- ATTENTION prompt.
