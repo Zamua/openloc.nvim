@@ -217,7 +217,6 @@ function M.ensure_isolated(name, script_path)
     HERDR_TAB_ID = true,
     HERDR_ENV = true,
     HERDR_BIN_PATH = true,
-    OPENLOC_ALLOW = true,
     OPENLOC_STRICT = true,
     OPENLOC_SPAWN = true,
     OPENLOC_NVIM = true,

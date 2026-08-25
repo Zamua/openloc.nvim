@@ -65,7 +65,6 @@ local function run_cli(s, args, opts)
     HERDR_TAB_ID = '',
     HERDR_ENV = '',
     HERDR_BIN_PATH = '',
-    OPENLOC_ALLOW = '',
     OPENLOC_STRICT = '',
     OPENLOC_SPAWN = '',
     OPENLOC_NVIM = '',
@@ -182,15 +181,11 @@ do
   r = run_cli(s, { 'open', 'bad\1name.txt:3', '--spawn', 'never' })
   ok(r.code == 3, 'oracle: control character in spec exits 3', r.code)
 
-  -- absolute path outside every resolved root
+  -- an existing file outside every resolved root still resolves; exit 2 is the
+  -- absent editor, not a rejected path
   local outside = s.dir .. '/out/f.txt'
   r = run_cli(s, { 'open', outside, '--spawn', 'never' })
-  ok(r.code == 3, 'oracle: confinement violation exits 3', r.code)
-  ok(r.stderr:find('confinement', 1, true) ~= nil, 'oracle: confinement named in error')
-
-  -- OPENLOC_ALLOW lifts confinement; exit 2 proves R0 passed (no editor)
-  r = run_cli(s, { 'open', outside, '--spawn', 'never' }, { env = { OPENLOC_ALLOW = s.dir } })
-  ok(r.code == 2, 'oracle: OPENLOC_ALLOW admits the path (exit 2, not 3)', r.code)
+  ok(r.code == 2, 'oracle: a path outside every root resolves (exit 2, not 3)', r.code)
 
   -- directories are not regular files
   r = run_cli(s, { 'open', s.work, '--spawn', 'never' })
@@ -830,9 +825,8 @@ do
     'addr: cursor at 7:3 in the forced editor', vim.inspect(pos))
 
   -- R0 still runs under --addr
-  H.lines_file(s.dir .. '/out/g.txt', 5)
-  r = run_cli(s, { 'open', s.dir .. '/out/g.txt', '--addr', sockB })
-  ok(r.code == 3, 'addr: confinement still enforced with --addr', r.code)
+  r = run_cli(s, { 'open', s.dir .. '/out/nope-g.txt', '--addr', sockB })
+  ok(r.code == 3, 'addr: stat oracle still enforced with --addr', r.code)
 
   -- dead socket: exit 4, discovery never consulted
   local dead = s.glob_sock()

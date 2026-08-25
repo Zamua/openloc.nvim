@@ -1,6 +1,6 @@
 -- CLI router: open, open-url, list, doctor. Runs under `nvim -l` (no plugin
 -- runtimepath, no init.lua); the entry script performs the R-1 self-unpublish
--- before this file loads. Implements R0 (stat oracle + confinement), R1-R3
+-- before this file loads. Implements R0 (stat oracle), R1-R3
 -- (registry fast paths), R4 (candidate union), R5 (deadline-bounded probes),
 -- R6 (session scope + live workspace filter), R7 (scoring), R8 (open),
 -- R9 (spawn fallback),
@@ -377,18 +377,12 @@ local function resolve_target(spec, roots, is_url)
   return nil, nil, nil, tried
 end
 
--- Confinement: the realpath must sit under a resolved root or a dir from the
--- OPENLOC_ALLOW allowlist (colon-separated). Returns the containing dir.
-local function confined(target, roots)
-  local dirs = {}
+-- The first resolved root that contains target, nil when none do. Supplies
+-- the spawn cwd, so a spawned editor lands on the project rather than on the
+-- target's parent directory.
+local function containing_root(target, roots)
   for _, r in ipairs(roots) do
-    dirs[#dirs + 1] = r
-  end
-  for d in (getenv('OPENLOC_ALLOW') or ''):gmatch('[^:]+') do
-    dirs[#dirs + 1] = d
-  end
-  for _, d in ipairs(dirs) do
-    local nd = norm_dir(d)
+    local nd = norm_dir(r)
     if nd and is_ancestor(nd, target) then
       return nd
     end
@@ -1199,7 +1193,7 @@ local function cmd_open(state, argv, is_url)
     end
   end
 
-  -- R0: stat oracle + confinement.
+  -- R0: stat oracle.
   if forbidden(spec) then
     return emit(state, EXIT.unresolved, nil, 'path contains control or invisible characters')
   end
@@ -1213,11 +1207,7 @@ local function cmd_open(state, argv, is_url)
   state.target = target
   state.line = flags.line or sline
   state.col = flags.col or scol
-  local root = confined(target, roots)
-  if not root then
-    return emit(state, EXIT.unresolved, nil,
-      'confinement: ' .. target .. ' is outside every resolved root (set OPENLOC_ALLOW to permit)')
-  end
+  local root = containing_root(target, roots)
 
   -- Forced target: no discovery, no election, just a liveness probe.
   local winner

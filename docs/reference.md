@@ -17,7 +17,7 @@ nvim -l bin/openloc doctor
 | --- | --- |
 | 0 | opened |
 | 2 | no editor found and spawning disabled |
-| 3 | path did not resolve to an existing file, or failed confinement |
+| 3 | path did not resolve to an existing file |
 | 4 | editor found but the open failed |
 | 5 | deadline exceeded: target accepted the socket, never answered |
 | 6 | ambiguous: several editors score too close (only with `--choose auto`) |
