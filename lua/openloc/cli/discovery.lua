@@ -97,18 +97,7 @@ local function record_probe(state, results, status)
   for addr, s in pairs(status) do
     local c = state.cands[addr]
     if c then
-      c.status = s
-      c.payload = results[addr]
-      if s ~= 'ok' then
-        c.excluded = true
-        if s == 'wedged' then
-          c.reasons[#c.reasons + 1] = 'unresponsive (accepted socket, no answer)'
-        elseif s == 'dead' then
-          c.reasons[#c.reasons + 1] = 'stale socket (connect failed)'
-        elseif s == 'self' then
-          c.reasons[#c.reasons + 1] = 'this CLI process'
-        end
-      end
+      candidate.probed(c, s, results[addr])
     end
   end
 end
@@ -141,12 +130,12 @@ local function fast_path(state, ctx, roots, target)
     local sock = key.socket_path(e.k)
     if uv.fs_stat(sock) then
       local c = add_candidate(state, sock, 'registry')
-      if not c.status then
+      if not candidate.probed_yet(c) then
         local results, status =
           remote.probe_all({ sock }, state.budget:clamp(remote.PROBE_PER_CANDIDATE_MS, RESERVE_PROBE_MS), { target = target })
         record_probe(state, results, status)
       end
-      if c.status == 'ok' then
+      if candidate.eligible(c) then
         table.insert(c.reasons, 1, 'registry fast path (' .. e.why .. ')')
         return c
       end
@@ -170,7 +159,7 @@ local function probe_all_candidates(state, target)
   end
   local todo = {}
   for _, addr in ipairs(state.order) do
-    if not state.cands[addr].status then
+    if not candidate.probed_yet(state.cands[addr]) then
       todo[#todo + 1] = addr
     end
   end
@@ -185,7 +174,7 @@ local function probe_all_candidates(state, target)
   local by_pid = {}
   for _, addr in ipairs(state.order) do
     local c = state.cands[addr]
-    if c.status == 'ok' then
+    if candidate.live(c) then
       local prev = by_pid[c.payload.pid]
       if not prev then
         by_pid[c.payload.pid] = c
@@ -195,9 +184,7 @@ local function probe_all_candidates(state, target)
           keep, drop = c, prev
           by_pid[c.payload.pid] = c
         end
-        drop.excluded = true
-        drop.status = 'duplicate'
-        drop.reasons[#drop.reasons + 1] = 'duplicate socket of ' .. keep.addr
+        candidate.mark_duplicate(drop, keep)
       end
     end
   end

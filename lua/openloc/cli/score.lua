@@ -1,5 +1,6 @@
 -- Candidate scoring (R6, R7) and the election order.
 
+local candidate = require('openloc.cli.candidate')
 local herdr = require('openloc.cli.herdr')
 local paths = require('openloc.cli.paths')
 
@@ -8,16 +9,15 @@ local norm_dir, is_ancestor = paths.norm_dir, paths.is_ancestor
 local M = {}
 
 local function score_candidate(state, c, ctx, target, target_git, live)
-  local p = c.payload
-  if not p or c.excluded then
+  if not candidate.eligible(c) then
     return
   end
+  local p = c.payload
   local score = 0
   local reasons = c.reasons
   -- R6: an nvim used purely as a terminal host is never a jump target.
   if p.term_only then
-    c.excluded = true
-    reasons[#reasons + 1] = 'excluded: only term:// buffers'
+    candidate.exclude(c, 'excluded: only term:// buffers')
     return
   end
   -- Session scope outranks every workspace signal: a link clicked in one
@@ -27,9 +27,8 @@ local function score_candidate(state, c, ctx, target, target_git, live)
   if mine then
     local theirs = herdr.session_of(herdr.build_proc_table(state), p.pid)
     if theirs and theirs ~= mine then
-      c.excluded = true
       c.session = theirs
-      reasons[#reasons + 1] = 'excluded: another herdr session (server pid ' .. tostring(theirs) .. ')'
+      candidate.exclude(c, 'excluded: another herdr session (server pid ' .. tostring(theirs) .. ')')
       c.score = score
       return
     end
@@ -44,8 +43,7 @@ local function score_candidate(state, c, ctx, target, target_git, live)
         score = score + 200
         reasons[#reasons + 1] = '+200 live workspace match'
       else
-        c.excluded = true
-        reasons[#reasons + 1] = 'excluded: live map places it in ' .. tostring(pane.workspace_id)
+        candidate.exclude(c, 'excluded: live map places it in ' .. tostring(pane.workspace_id))
         c.score = score
         return
       end
@@ -98,7 +96,7 @@ local function eligible_sorted(state)
   local eligible = {}
   for _, addr in ipairs(state.order) do
     local c = state.cands[addr]
-    if c.status == 'ok' and not c.excluded then
+    if candidate.eligible(c) then
       eligible[#eligible + 1] = c
     end
   end

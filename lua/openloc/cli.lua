@@ -18,6 +18,7 @@ local remote = require('openloc.remote')
 local EXIT = require('openloc.cli.exit')
 local args = require('openloc.cli.args')
 local budget = require('openloc.cli.budget')
+local candidate = require('openloc.cli.candidate')
 local discovery = require('openloc.cli.discovery')
 local doctor = require('openloc.cli.doctor')
 local getenv = require('openloc.cli.env').getenv
@@ -97,8 +98,8 @@ local function cmd_open(state, argv, is_url)
     local results, status =
       remote.probe_all({ flags.addr }, state.budget:clamp(remote.PROBE_PER_CANDIDATE_MS, RESERVE_PROBE_MS), { target = target })
     discovery.record_probe(state, results, status)
-    if c.status ~= 'ok' then
-      local why = c.status == 'wedged'
+    if not candidate.eligible(c) then
+      local why = c.state == 'wedged'
         and 'accepted the socket but never answered'
         or 'has no editor listening (connect failed)'
       return report.emit(state, EXIT.open_failed, nil, '--addr ' .. flags.addr .. ' ' .. why)
@@ -113,7 +114,7 @@ local function cmd_open(state, argv, is_url)
       winner = discovery.fast_path(state, ctx, roots, target)
       if winner then
         score.score_candidate(state, winner, ctx, target, target_git, nil)
-        if winner.excluded then
+        if not candidate.eligible(winner) then
           winner = nil
         end
       end
