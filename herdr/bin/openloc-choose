@@ -37,7 +37,7 @@ NVIM_BIN="$(resolve_nvim)" || fail 'no nvim found; set OPENLOC_NVIM'
 
 ROOT="${HERDR_PLUGIN_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"
 CLI="${OPENLOC_CLI:-$ROOT/cli/openloc.lua}"
-[ -f "$CLI" ] || CLI="$ROOT/../lua/openloc/cli.lua"
+[ -f "$CLI" ] || CLI="$ROOT/../bin/openloc"
 [ -f "$CLI" ] || fail "no CLI found under $ROOT; reinstall the plugin"
 
 [ -n "${OPENLOC_CHOOSE_JSON:-}" ] || fail 'OPENLOC_CHOOSE_JSON is empty'
