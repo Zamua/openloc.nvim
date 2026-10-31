@@ -149,7 +149,7 @@ local function cmd_open(state, argv, is_url)
   if status == 'wedged' then
     return report.emit(state, EXIT.deadline, nil, 'deadline exceeded: ' .. winner.addr .. ' accepted the socket but never answered')
   end
-  if status == 'dead' or type(ack) ~= 'table' then
+  if status == 'dead' then
     return report.emit(state, EXIT.open_failed, nil, 'editor at ' .. winner.addr .. ' died before the open')
   end
   if ack.ok ~= true then

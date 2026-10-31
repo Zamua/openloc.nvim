@@ -49,7 +49,7 @@ local function score_candidate(state, c, ctx, target, target_git, live)
         c.score = score
         return
       end
-    elseif type(p.ws) == 'string' and p.ws ~= ctx.workspace_id then
+    elseif p.ws and p.ws ~= ctx.workspace_id then
       score = score - 150
       reasons[#reasons + 1] = '-150 env workspace mismatch (unconfirmed)'
     end
@@ -61,12 +61,10 @@ local function score_candidate(state, c, ctx, target, target_git, live)
       reasons[#reasons + 1] = '+100 target already open'
     end
     local best = 0
-    if type(p.roots) == 'table' then
-      for _, r in ipairs(p.roots) do
-        local nd = norm_dir(r)
-        if nd and is_ancestor(nd, target) and #nd > best then
-          best = #nd
-        end
+    for _, r in ipairs(p.roots) do
+      local nd = norm_dir(r)
+      if nd and is_ancestor(nd, target) and #nd > best then
+        best = #nd
       end
     end
     if best > 0 then
@@ -74,7 +72,7 @@ local function score_candidate(state, c, ctx, target, target_git, live)
       reasons[#reasons + 1] = '+50 declared root ancestor'
       longest = best
     end
-    if target_git and type(p.git) == 'string' and norm_dir(p.git) == target_git then
+    if target_git and p.git and norm_dir(p.git) == target_git then
       score = score + 40
       reasons[#reasons + 1] = '+40 git root match'
     end
@@ -111,8 +109,7 @@ local function eligible_sorted(state)
     if a.longest ~= b.longest then
       return a.longest > b.longest
     end
-    local as = tonumber(a.payload and a.payload.started)
-    local bs = tonumber(b.payload and b.payload.started)
+    local as, bs = a.payload.started, b.payload.started
     if as and bs then
       if as ~= bs then
         return as > bs
@@ -121,7 +118,7 @@ local function eligible_sorted(state)
       -- A missing started (stock nvim) sorts last.
       return as ~= nil
     end
-    return (a.payload.pid or math.huge) < (b.payload.pid or math.huge)
+    return a.payload.pid < b.payload.pid
   end)
   return eligible
 end

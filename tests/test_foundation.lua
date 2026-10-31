@@ -15,6 +15,7 @@ package.path = table.concat({
 
 local key = require('openloc.key')
 local remote = require('openloc.remote')
+local wire = require('openloc.wire')
 
 local npass, nfail = 0, 0
 local function ok(cond, name, detail)
@@ -150,6 +151,10 @@ ok(ack2 and ack2.ok == true and ack2.line == 20, 'remote: line clamped to buffer
 local r2 = remote.probe_all({ sock_a }, nil, { target = target })
 ok(r2[sock_a] and r2[sock_a].has == true, 'remote: has=true after open')
 
+-- the decoded payload is typed at the edge: consumers never re-check shapes
+ok(p and type(p.has) == 'boolean' and type(p.term_only) == 'boolean' and type(p.roots) == 'table',
+  'remote: probe payload carries booleans and a roots list', vim.inspect(p))
+
 -- dead socket: connect failure, not a hang
 local dead_sock = '/tmp/oltest-found-' .. mypid .. '-dead.sock'
 local rd, sd = remote.probe_all({ dead_sock })
@@ -190,6 +195,32 @@ local wack, wost = remote.open_in(sock_w, target, 1, 1, 500)
 local wopen_ms = (uv.hrtime() - t3) / 1e6
 ok(wack == nil and wost == 'wedged', 'remote: open into wedged yields nil ack + wedged')
 ok(wopen_ms < 3000, ('remote: wedged open bounded (%.0fms)'):format(wopen_ms))
+
+-- ---------------------------------------------------------------- wire.lua
+
+print('== wire ==')
+ok(wire.decode_probe('garbage') == nil, 'wire: non-table probe answer rejected')
+ok(wire.decode_probe({ cwd = '/x' }) == nil, 'wire: probe answer without a pid rejected')
+ok(wire.decode_probe({ pid = '7' }) == nil, 'wire: probe answer with a non-numeric pid rejected')
+local dp = wire.decode_probe({
+  pid = 7, ws = 5, cwd = '/x', git = '/g', has = 'yes', term_only = true,
+  roots = { '/a', '', 3, '/b' }, started = 'soon', pane = 'w1:p1',
+})
+ok(dp ~= nil and dp.pid == 7 and dp.cwd == '/x' and dp.git == '/g' and dp.pane == 'w1:p1',
+  'wire: well-typed probe fields survive', vim.inspect(dp))
+ok(dp and dp.ws == nil and dp.started == nil, 'wire: wrong-typed scalar fields are dropped')
+ok(dp and dp.has == false and dp.term_only == true, 'wire: booleans are strict')
+ok(dp and vim.deep_equal(dp.roots, { '/a', '/b' }), 'wire: roots keep only non-empty strings',
+  dp and vim.inspect(dp.roots))
+ok(wire.decode_probe({ pid = 1 }).roots[1] == nil, 'wire: roots default to an empty list')
+ok(wire.decode_ack(nil) == nil and wire.decode_ack('x') == nil, 'wire: non-table ack rejected')
+local da = wire.decode_ack({ ok = true, pid = 9, buf = '/f', line = 3, col = 2, err = 4 })
+ok(da and da.ok == true and da.pid == 9 and da.buf == '/f' and da.line == 3 and da.col == 2,
+  'wire: well-typed ack fields survive', vim.inspect(da))
+ok(da and da.err == nil, 'wire: wrong-typed ack err is dropped')
+ok(wire.decode_ack({ ok = 'true' }).ok == false, 'wire: ack ok is strict')
+ok(wire.decode_json('{"a":null,"b":[1]}').a == nil and wire.decode_json('not json') == 'not json',
+  'wire: decode_json passes non-JSON through for the typed decoders to reject')
 
 -- ---------------------------------------------------------------- summary
 
