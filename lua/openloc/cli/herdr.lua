@@ -200,7 +200,7 @@ local function focus_winner(state, c, ack)
     return false
   end
   local pane_id = c.live_pane or (ack and ack.pane) or (c.payload and c.payload.pane)
-  if type(pane_id) ~= 'string' or pane_id == '' then
+  if not pane_id or pane_id == '' then
     return false
   end
   local res = herdr_json(state, { bin, 'pane', 'get', pane_id }, HERDR_CALL_MS)

@@ -191,7 +191,7 @@ local function probe_all_candidates(state, target)
   local by_pid = {}
   for _, addr in ipairs(state.order) do
     local c = state.cands[addr]
-    if c.status == 'ok' and c.payload and c.payload.pid then
+    if c.status == 'ok' then
       local prev = by_pid[c.payload.pid]
       if not prev then
         by_pid[c.payload.pid] = c
