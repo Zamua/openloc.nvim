@@ -1,11 +1,22 @@
 -- :checkhealth openloc
 
 local uv = vim.uv
+local diagnostics = require('openloc.diagnostics')
 
 local M = {}
 
-local function perm_bits(mode)
-  return mode % 512
+local function render(f)
+  local health = vim.health
+  local text = f.topic .. ': ' .. f.msg
+  if f.level == 'ok' then
+    health.ok(text)
+  elseif f.level == 'info' then
+    health.info(text)
+  elseif f.level == 'warn' then
+    health.warn(text, f.hint)
+  else
+    health.error(text, f.hint)
+  end
 end
 
 local function sock_alive(path)
@@ -23,20 +34,9 @@ function M.check()
   local dir = key.registry_dir()
 
   health.start('registry')
-  local st = uv.fs_stat(dir)
-  if not st then
-    health.info('registry dir not created yet: ' .. dir)
-  elseif st.type ~= 'directory' then
-    health.error('registry path is not a directory: ' .. dir)
-  else
-    if st.uid ~= uv.getuid() then
-      health.error(('registry dir owned by uid %d, expected %d: %s'):format(st.uid, uv.getuid(), dir))
-    elseif perm_bits(st.mode) ~= 448 then
-      health.warn(('registry dir mode %o, expected 700: %s'):format(perm_bits(st.mode), dir),
-        'chmod 700 ' .. dir)
-    else
-      health.ok('registry dir ' .. dir .. ' (mode 700, owned by this user)')
-    end
+  local dir_finding, st = diagnostics.registry_dir(dir)
+  render(dir_finding)
+  if st and st.type == 'directory' then
     local live, stale = 0, {}
     for name in vim.fs.dir(dir) do
       if name:match('%.sock$') then
@@ -59,16 +59,7 @@ function M.check()
   end
 
   health.start('socket path length')
-  -- longest generated name: 'ws-' plus 12 hex plus '.sock'
-  local worst = #dir + 1 + 20
-  if worst >= 104 then
-    health.error(('registry socket paths reach %d bytes; unix sockets truncate silently at 104'):format(worst),
-      'point XDG_CACHE_HOME at a shorter path')
-  elseif worst >= key.MAX_SOCKET_PATH then
-    health.warn(('registry socket paths reach %d bytes, near the 104-byte limit'):format(worst))
-  else
-    health.ok(('worst-case socket path %d bytes (limit 104)'):format(worst))
-  end
+  render(diagnostics.socket_path_length(dir))
 
   health.start('this instance')
   local openloc = package.loaded['openloc']
@@ -96,18 +87,10 @@ function M.check()
   end
 
   health.start('tools')
-  if vim.fn.executable('nvim') == 1 then
-    health.ok('nvim on PATH')
-  else
-    health.warn('nvim not on PATH',
-      'the herdr launcher probes common install paths; set OPENLOC_NVIM to override')
-  end
-  if vim.fn.executable('herdr') == 1 then
-    local out = vim.fn.system({ 'herdr', '--version' })
-    health.ok('herdr found: ' .. vim.trim(out))
-  else
-    health.info('herdr not on PATH; routing works, but the CLI cannot resolve live workspace ids')
-  end
+  render(diagnostics.nvim_on_path())
+  local herdr_bin = vim.fn.exepath('herdr')
+  herdr_bin = herdr_bin ~= '' and herdr_bin or nil
+  render(diagnostics.herdr(herdr_bin, herdr_bin and vim.fn.system({ herdr_bin, '--version' }) or nil))
   health.info('herdr Ctrl-click needs mouse_capture = true (the default) and the modifier is Ctrl on every platform, including macOS; the keyboard picker works regardless')
 
   health.start('install points')

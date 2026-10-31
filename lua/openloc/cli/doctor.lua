@@ -5,6 +5,7 @@ local key = require('openloc.key')
 local remote = require('openloc.remote')
 local EXIT = require('openloc.cli.exit')
 local budget = require('openloc.cli.budget')
+local diagnostics = require('openloc.diagnostics')
 local discovery = require('openloc.cli.discovery')
 local herdr = require('openloc.cli.herdr')
 
@@ -17,26 +18,19 @@ local function run(state)
   local function line(status, msg)
     out[#out + 1] = string.format('%-4s %s', status, msg)
   end
+  local function render(f)
+    line(f.level == 'error' and 'FAIL' or f.level, f.topic .. ': ' .. f.msg)
+  end
   local src = debug.getinfo(1, 'S').source:gsub('^@', '')
   local cli_dir = vim.fs.dirname(vim.fs.dirname(uv.fs_realpath(src) or src))
   local cli_path = cli_dir .. '/cli.lua'
   line(uv.fs_stat(cli_path) and 'ok' or 'FAIL', 'cli: ' .. cli_path)
   line('ok', 'nvim: ' .. vim.v.progpath .. ' (' .. tostring(vim.version()) .. ')')
-  local on_path = vim.fn.exepath('nvim')
-  line(on_path ~= '' and 'ok' or 'warn', 'nvim on PATH: ' .. (on_path ~= '' and on_path or 'NOT FOUND'))
+  render(diagnostics.nvim_on_path())
 
   local dir = key.registry_dir()
-  local st = uv.fs_stat(dir)
-  if st then
-    local mode = st.mode % 512 -- low 9 permission bits
-    line(mode == 448 and 'ok' or 'warn',
-      string.format('registry dir: %s (mode %o)', dir, mode))
-  else
-    line('warn', 'registry dir missing (no plugin-registered editor yet): ' .. dir)
-  end
-  local sample = key.socket_path(key.ws_key('w0000000'))
-  line(#sample < key.MAX_SOCKET_PATH and 'ok' or 'FAIL',
-    string.format('socket path length: %d of %d max (%s)', #sample, key.MAX_SOCKET_PATH, sample))
+  render(diagnostics.registry_dir(dir))
+  render(diagnostics.socket_path_length(dir))
 
   local socks = discovery.registry_sockets()
   if #socks > 0 then
@@ -68,12 +62,7 @@ local function run(state)
   end
 
   local bin = herdr.bin()
-  if bin then
-    local v = herdr.run(state, { bin, '--version' }, HERDR_CALL_MS)
-    line('ok', 'herdr: ' .. bin .. ' (' .. (v and v:gsub('%s+$', '') or 'version unknown') .. ')')
-  else
-    line('warn', 'herdr: not found (live workspace filter and pane spawn unavailable)')
-  end
+  render(diagnostics.herdr(bin, bin and herdr.run(state, { bin, '--version' }, HERDR_CALL_MS) or nil))
   local sess = herdr.current_session(state)
   if sess then
     line('ok', 'herdr session: server pid ' .. tostring(sess)
