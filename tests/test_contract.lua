@@ -11,6 +11,7 @@ H.ensure_isolated('contract', this_abs)
 
 package.path = H.root .. '/lua/?.lua;' .. H.root .. '/lua/?/init.lua;' .. package.path
 local EXIT = require('openloc.cli.exit')
+local args = require('openloc.cli.args')
 local ok = H.ok
 
 local function slurp(rel)
@@ -41,5 +42,39 @@ for code in slurp('docs/reference.md'):gmatch('\n| (%d+) |') do
 end
 ok(vim.deep_equal(want, documented), 'exit: docs/reference.md table lists exactly the CLI exit codes',
   vim.inspect(documented) .. ' vs ' .. vim.inspect(want))
+
+print('== flags ==')
+local docs = slurp('docs/reference.md')
+local cli_block = docs:match('```\nnvim %-l bin/openloc.-```') or ''
+for name in pairs(args.FLAGS) do
+  ok(args.USAGE:find('--' .. name, 1, true) ~= nil, 'flags: --' .. name .. ' is in the usage text')
+  ok(cli_block:find('--' .. name, 1, true) ~= nil, 'flags: --' .. name .. ' is in the documented CLI synopsis')
+end
+
+print('== environment ==')
+-- popup-to-chooser plumbing and script-local names, not user-facing settings
+local internal = {
+  OPENLOC_CHOOSE_JSON = true, OPENLOC_CHOOSE_ARGS = true, OPENLOC_CHOOSE_INPUT = true,
+  OPENLOC_CHOOSE_EOF = true, OPENLOC_EXIT_AMBIGUOUS = true, OPENLOC_PROG = true,
+}
+local seen = {}
+for _, dir in ipairs({ 'lua', 'herdr', 'bin', 'claude', 'plugin' }) do
+  for name, kind in vim.fs.dir(H.root .. '/' .. dir, { depth = 4 }) do
+    if kind == 'file' then
+      local f = io.open(H.root .. '/' .. dir .. '/' .. name, 'r')
+      if f then
+        for var in f:read('*a'):gmatch('OPENLOC_[A-Z_]+') do
+          seen[var] = true
+        end
+        f:close()
+      end
+    end
+  end
+end
+for var in pairs(seen) do
+  if not internal[var] then
+    ok(docs:find(var, 1, true) ~= nil, 'env: ' .. var .. ' is documented')
+  end
+end
 
 H.summary()
