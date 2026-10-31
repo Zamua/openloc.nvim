@@ -4,15 +4,7 @@
 -- (registry fast paths), R4 (candidate union), R5 (deadline-bounded probes),
 -- R6 (session scope + live workspace filter), R7 (scoring), R8 (open),
 -- R9 (spawn fallback), R10 (focus). No step may block past the global
--- wall-clock cap.
-
--- Under nvim -l require() cannot see this repo; resolve it from this file.
-if not pcall(require, 'openloc.key') then
-  local src = debug.getinfo(1, 'S').source:gsub('^@', '')
-  local dir = vim.fs.dirname((vim.uv or vim.loop).fs_realpath(src) or src)
-  local lua_root = vim.fs.dirname(dir)
-  package.path = lua_root .. '/?.lua;' .. lua_root .. '/?/init.lua;' .. package.path
-end
+-- wall-clock cap. Loaded by bin/openloc, which sets package.path.
 
 local remote = require('openloc.remote')
 local EXIT = require('openloc.cli.exit')
