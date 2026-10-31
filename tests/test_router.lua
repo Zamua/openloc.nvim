@@ -181,6 +181,19 @@ do
   r = run_cli(s, { 'open', 'bad\1name.txt:3', '--spawn', 'never' })
   ok(r.code == 3, 'oracle: control character in spec exits 3', r.code)
 
+  -- every invisible or direction-changing codepoint is refused up front
+  local invisible = {
+    ['U+200B'] = '\226\128\139', ['U+200E'] = '\226\128\142', ['U+200F'] = '\226\128\143',
+    ['U+202E'] = '\226\128\174', ['U+2028'] = '\226\128\168', ['U+2029'] = '\226\128\169',
+    ['U+2066'] = '\226\129\166', ['U+FEFF'] = '\239\187\191',
+    ['U+0080'] = '\194\128', ['U+0085'] = '\194\133', ['U+009F'] = '\194\159',
+  }
+  for cp, bytes in pairs(invisible) do
+    r = run_cli(s, { 'open', 'f' .. bytes .. '.txt', '--spawn', 'never' })
+    ok(r.code == 3 and r.stderr:find('control or invisible', 1, true) ~= nil,
+      'oracle: ' .. cp .. ' in a spec is refused as invisible', r.code .. ' ' .. (r.stderr or ''))
+  end
+
   -- an existing file outside every resolved root still resolves; exit 2 is the
   -- absent editor, not a rejected path
   local outside = s.dir .. '/out/f.txt'

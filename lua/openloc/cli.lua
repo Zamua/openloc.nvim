@@ -107,14 +107,15 @@ local function is_ancestor(dir, path)
   return path == dir or path:sub(1, #dir + 1) == dir .. '/'
 end
 
--- Control, zero-width and bidi characters are how a displayed path lies
--- about its target.
+-- Control, zero-width, bidi and line-separator characters are how a displayed
+-- path lies about its target.
 local function forbidden(path)
   if path:find('%c') then return true end
-  if path:find('\226\128[\139-\141]') then return true end -- U+200B..U+200D
-  if path:find('\239\187\191', 1, true) then return true end -- U+FEFF
-  if path:find('\226\128[\170-\174]') then return true end -- U+202A..U+202E
+  if path:find('\194[\128-\159]') then return true end -- C1 controls U+0080..U+009F
+  if path:find('\226\128[\139-\143]') then return true end -- U+200B..U+200F
+  if path:find('\226\128[\168-\174]') then return true end -- U+2028..U+202E
   if path:find('\226\129[\166-\169]') then return true end -- U+2066..U+2069
+  if path:find('\239\187\191', 1, true) then return true end -- U+FEFF
   return false
 end
 
