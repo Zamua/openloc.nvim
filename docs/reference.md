@@ -7,8 +7,8 @@ The front-page README covers install and the demo. Everything else is here.
 Zero-dependency Lua, executed by Neovim itself:
 
 ```
-nvim -l bin/openloc open <path>[:line[:col]] [--ws ID] [--session PID] [--cwd PATH] [--addr SOCKET] [--choose auto|never] [--json] [--spawn split|never]
-nvim -l bin/openloc open-url <url>
+nvim -l bin/openloc open <path>[:line[:col]] [--ws ID] [--session PID] [--cwd PATH] [--line N] [--col N] [--addr SOCKET] [--choose auto|never] [--json] [--spawn split|never]
+nvim -l bin/openloc open-url <url> [--strict] [--addr SOCKET] [--session PID] [--choose auto|never] [--json] [--spawn split|never]
 nvim -l bin/openloc list [--json]
 nvim -l bin/openloc doctor
 ```
@@ -27,6 +27,22 @@ No invocation blocks past a 5 second wall clock. `--json` names the winner,
 its score and reasons, and every candidate. With no live editor, `--spawn
 split` opens a Neovim in a new herdr pane; outside herdr, `OPENLOC_SPAWN=1`
 launches `$VISUAL`/`$EDITOR` detached.
+
+`--line N` and `--col N` set the position and win over a `:line:col` suffix
+and over the URL's `l` and `c`. `open-url` accepts any http(s) URL and reads
+only its query; `--strict`, or `OPENLOC_STRICT=1`, also requires the host
+`openloc.invalid`.
+
+### Environment
+
+| variable | effect |
+| --- | --- |
+| `OPENLOC_NVIM` | the nvim the herdr launcher runs the CLI with, and the one a spawned pane starts |
+| `OPENLOC_CLI` | CLI entry the herdr launcher runs instead of the bundled one |
+| `OPENLOC_SPAWN` | `1` lets `open` launch `$VISUAL`/`$EDITOR` detached when no editor is found outside herdr |
+| `OPENLOC_PICK_MARGIN` | score gap under which `--choose auto` raises the chooser (default 75) |
+| `OPENLOC_STRICT` | `1` is `--strict` for `open-url` |
+| `OPENLOC_LINKS` | `off` disables the Claude Code plugin's SessionStart instruction |
 
 ## Choosing between editors
 
