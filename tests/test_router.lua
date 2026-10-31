@@ -749,6 +749,12 @@ do
   ok(r.code == 0, 'doctor: exits 0', r.code .. ' ' .. (r.stderr or ''))
   ok(r.stdout:find('cli:', 1, true) ~= nil, 'doctor: reports the resolved cli path')
   ok(r.stdout:find('socket path length', 1, true) ~= nil, 'doctor: reports socket length headroom')
+
+  -- a cache path that overflows sun_path is a FAIL line, the same verdict
+  -- :checkhealth gives
+  r = run_cli(s, { 'doctor' }, { env = { XDG_CACHE_HOME = s.dir .. '/' .. string.rep('c', 90) } })
+  ok(r.code == 0 and r.stdout:find('FAIL socket path length', 1, true) ~= nil,
+    'doctor: an overlong registry path is reported FAIL', r.stdout)
 end
 
 -- ------------------------------------------- --choose auto election / exit 6
