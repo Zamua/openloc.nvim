@@ -99,7 +99,7 @@ local function run()
   end)
   local ack = {
     ok = ok,
-    err = ok and nil or tostring(err),
+    err = not ok and tostring(err) or nil,
     pid = vim.fn.getpid(),
     buf = vim.api.nvim_buf_get_name(0),
     line = vim.fn.line('.'),
