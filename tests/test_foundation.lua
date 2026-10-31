@@ -136,6 +136,7 @@ print(('  probe round trip: %.1fms'):format(probe_ms))
 local ack, ost = remote.open_in(sock_a, target, 7, 3)
 ok(ack ~= nil and ost == 'ok', 'remote: open_in acked', ost)
 ok(ack and ack.ok == true, 'remote: open succeeded', ack and ack.err or nil)
+ok(ack and ack.err == nil, 'remote: a successful open carries no err', ack and ack.err)
 ok(ack and ack.line == 7 and ack.col == 3, 'remote: cursor at 7:3',
   ack and (ack.line .. ':' .. ack.col) or nil)
 ok(ack and uv.fs_realpath(ack.buf) == target, 'remote: right buffer opened')
