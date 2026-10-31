@@ -660,6 +660,21 @@ do
   ok((r.stdout or ''):find('FOREIGN', 1, true) == nil, 'shim: foreign cli.lua never executed', r.stdout)
   ok((r.stderr or ''):find('reinstall', 1, true) ~= nil, 'shim: reinstall instruction printed', r.stderr)
   ok((r.stderr or ''):find(s.dir .. '/lua', 1, true) == nil, 'shim: no foreign path named', r.stderr)
+
+  -- in the full layout the shim hands off to the CLI and returns its exit code
+  r = vim.system({ vim.v.progpath, '-l', shim_src, 'list' }, {
+    text = true,
+    timeout = 8000,
+    env = { TMPDIR = s.tmp, USER = s.user, XDG_RUNTIME_DIR = s.run, XDG_CACHE_HOME = s.cache, HOME = s.dir },
+  }):wait()
+  ok(r.code == 0 and (r.stdout or ''):find('no live editors', 1, true) ~= nil,
+    'shim: full layout runs the CLI', r.code .. ' ' .. (r.stdout or '') .. (r.stderr or ''))
+  r = vim.system({ vim.v.progpath, '-l', shim_src, 'bogus' }, {
+    text = true,
+    timeout = 8000,
+    env = { TMPDIR = s.tmp, USER = s.user, XDG_RUNTIME_DIR = s.run, XDG_CACHE_HOME = s.cache, HOME = s.dir },
+  }):wait()
+  ok(r.code == 1, 'shim: the CLI exit code propagates', r.code)
 end
 
 -- ------------------------------------------------------ herdr launcher

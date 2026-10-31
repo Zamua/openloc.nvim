@@ -23,13 +23,4 @@ end
 
 package.path = lua_dir .. '/?.lua;' .. lua_dir .. '/?/init.lua;' .. package.path
 
-local mod = dofile(cli_path)
-if type(mod) == 'table' then
-  local main = mod.main or mod.run
-  if type(main) == 'function' then
-    local code = main(_G.arg)
-    os.exit(type(code) == 'number' and code or 0)
-  end
-end
-io.stderr:write('openloc: cli.lua exposes no main(arg) entry\n')
-os.exit(1)
+os.exit(dofile(cli_path).main(_G.arg))
