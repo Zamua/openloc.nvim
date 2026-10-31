@@ -5,7 +5,9 @@
 # The popup closes when this script exits.
 set -euo pipefail
 
-err() { printf 'openloc-choose: %s\n' "$*" >&2; }
+OPENLOC_PROG=openloc-choose
+# shellcheck source=lib.sh
+. "$(dirname -- "${BASH_SOURCE[0]}")/lib.sh"
 
 # The popup vanishes on exit; hold failures on screen long enough to read.
 fail() {
@@ -14,31 +16,10 @@ fail() {
   exit 1
 }
 
-resolve_nvim() {
-  if [ -n "${OPENLOC_NVIM:-}" ] && [ -x "${OPENLOC_NVIM:-}" ]; then
-    printf '%s\n' "$OPENLOC_NVIM"
-    return 0
-  fi
-  if command -v nvim >/dev/null 2>&1; then
-    command -v nvim
-    return 0
-  fi
-  local cand
-  for cand in /opt/homebrew/bin/nvim /usr/local/bin/nvim /usr/bin/nvim; do
-    if [ -x "$cand" ]; then
-      printf '%s\n' "$cand"
-      return 0
-    fi
-  done
-  return 1
-}
-
 NVIM_BIN="$(resolve_nvim)" || fail 'no nvim found; set OPENLOC_NVIM'
 
-ROOT="${HERDR_PLUGIN_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"
-CLI="${OPENLOC_CLI:-$ROOT/cli/openloc.lua}"
-[ -f "$CLI" ] || CLI="$ROOT/../bin/openloc"
-[ -f "$CLI" ] || fail "no CLI found under $ROOT; reinstall the plugin"
+ROOT="$(plugin_root)"
+CLI="$(resolve_cli "$ROOT")" || fail "no CLI found under $ROOT; reinstall the plugin"
 
 [ -n "${OPENLOC_CHOOSE_JSON:-}" ] || fail 'OPENLOC_CHOOSE_JSON is empty'
 [ -n "${OPENLOC_CHOOSE_ARGS:-}" ] || fail 'OPENLOC_CHOOSE_ARGS is empty'
