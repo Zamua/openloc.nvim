@@ -294,7 +294,10 @@ local function build_ctx(flags, url)
   if type(plug.worktree) == 'table' then
     ctx.worktree = plug.worktree
   end
-  ctx.base = flags.cwd or (url and url.params.cwd)
+  -- A link's cwd only helps resolve a relative path. It comes from whatever text was clicked, so
+  -- it never becomes a confinement root; the --cwd flag does, since the caller chose it.
+  ctx.base = flags.cwd
+  ctx.link_base = url and url.params.cwd
   -- Pane-inherited HERDR_* vars are absent in a plugin action or link
   -- handler, which receives only HERDR_PLUGIN_*; both mean herdr is present.
   ctx.herdr_env = (getenv('HERDR_ENV') or getenv('HERDR_PANE_ID') or getenv('HERDR_WORKSPACE_ID')
@@ -302,7 +305,9 @@ local function build_ctx(flags, url)
   return ctx
 end
 
-local function roots_in_order(ctx)
+-- Trusted roots: they bound what may be opened. With_link adds the link's cwd as a resolution
+-- base only.
+local function roots_in_order(ctx, with_link)
   local roots = {}
   local function add(p)
     if type(p) == 'string' and p ~= '' then
@@ -313,6 +318,9 @@ local function roots_in_order(ctx)
   add(ctx.workspace_cwd)
   add(ctx.focused_pane_cwd)
   add(ctx.base)
+  if with_link then
+    add(ctx.link_base)
+  end
   add(getenv('PWD') or uv.cwd())
   return roots
 end
@@ -1108,7 +1116,7 @@ local function cmd_open(state, argv, is_url)
     return emit(state, EXIT.unresolved, nil, 'path contains control or invisible characters')
   end
   local ctx = build_ctx(flags, url)
-  local roots = roots_in_order(ctx)
+  local roots = roots_in_order(ctx, true)
   local target, sline, scol, tried = resolve_target(spec, roots, is_url)
   if not target then
     return emit(state, EXIT.unresolved, nil,
@@ -1117,7 +1125,7 @@ local function cmd_open(state, argv, is_url)
   state.target = target
   state.line = flags.line or sline
   state.col = flags.col or scol
-  local root = confined(target, roots)
+  local root = confined(target, roots_in_order(ctx, false))
   if not root then
     return emit(state, EXIT.unresolved, nil,
       'confinement: ' .. target .. ' is outside every resolved root (set OPENLOC_ALLOW to permit)')

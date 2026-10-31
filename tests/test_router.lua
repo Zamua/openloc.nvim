@@ -192,6 +192,19 @@ do
   r = run_cli(s, { 'open', outside, '--spawn', 'never' }, { env = { OPENLOC_ALLOW = s.dir } })
   ok(r.code == 2, 'oracle: OPENLOC_ALLOW admits the path (exit 2, not 3)', r.code)
 
+  -- a link's cwd resolves relative paths but never widens confinement
+  local function q(str)
+    return (str:gsub('[^%w%-_%.~]', function(ch)
+      return ('%%%02X'):format(ch:byte())
+    end))
+  end
+  r = run_cli(s, { 'open-url', 'https://openloc.invalid/o?p=' .. q(outside) .. '&cwd=' .. q('/'), '--spawn', 'never' })
+  ok(r.code == 3, 'oracle: url cwd=/ does not admit a path outside the roots', r.code)
+  ok(r.stderr:find('confinement', 1, true) ~= nil, 'oracle: url confinement named in error')
+  r = run_cli(s, { 'open-url', 'https://openloc.invalid/o?p=' .. q('f.txt') .. '&cwd=' .. q(s.dir .. '/out'),
+    '--spawn', 'never' })
+  ok(r.code == 3, 'oracle: url cwd outside the roots cannot be a base for confinement', r.code)
+
   -- directories are not regular files
   r = run_cli(s, { 'open', s.work, '--spawn', 'never' })
   ok(r.code == 3, 'oracle: a directory exits 3', r.code)

@@ -51,6 +51,10 @@ Only `p` is required; `p` and `cwd` are percent encoded. `openloc.invalid`
 never resolves, so a stray click without the handler is a DNS error page.
 Non-http(s) URLs are rejected.
 
+`cwd` is only a base for resolving a relative `p`. A link is untrusted text, so its
+`cwd` never widens confinement: the target must still sit under a root from the
+herdr context, `--cwd`, the working directory, or `OPENLOC_ALLOW`.
+
 ## Making an agent emit clickable refs
 
 Claude Code: install the bundled plugin (`/plugin marketplace add
