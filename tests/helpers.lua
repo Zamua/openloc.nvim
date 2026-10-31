@@ -34,6 +34,12 @@ function M.write_file(p, content)
   f:close()
 end
 
+-- Executable script (stand-in binaries, fake CLIs).
+function M.write_exec(p, content)
+  M.write_file(p, content)
+  uv.fs_chmod(p, tonumber('755', 8))
+end
+
 -- n numbered lines, so cursor assertions have a known line count.
 function M.lines_file(p, n)
   local t = {}
