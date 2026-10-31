@@ -187,26 +187,7 @@ local function cmd_list(state, argv)
   if state.json then
     return report.emit(state, EXIT.ok)
   end
-  if #state.order == 0 then
-    io.stdout:write('no live editors found\n')
-    return EXIT.ok
-  end
-  for _, addr in ipairs(state.order) do
-    local c = state.cands[addr]
-    local p = c.payload or {}
-    io.stdout:write(string.format(
-      '%-8s %-9s pid=%-8s sess=%-8s ws=%-8s score=%-5d cwd=%s addr=%s%s\n',
-      c.status or '?',
-      c.origin,
-      tostring(p.pid or '-'),
-      tostring(c.session or '-'),
-      tostring(p.ws or '-'),
-      c.score,
-      tostring(p.cwd or '-'),
-      c.addr,
-      #c.reasons > 0 and ('  [' .. table.concat(c.reasons, '; ') .. ']') or ''
-    ))
-  end
+  report.list_rows(state)
   return EXIT.ok
 end
 

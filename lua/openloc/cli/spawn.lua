@@ -9,6 +9,7 @@ local budget = require('openloc.cli.budget')
 local getenv = require('openloc.cli.env').getenv
 local herdr = require('openloc.cli.herdr')
 local norm_dir = require('openloc.cli.paths').norm_dir
+local candidate = require('openloc.cli.candidate')
 local report = require('openloc.cli.report')
 
 local HERDR_CALL_MS = budget.HERDR_CALL_MS
@@ -92,7 +93,8 @@ local function join_spawning_editor(state, lock, target, line, col)
     end
     local ack, status = remote.open_in(sock, target, line, col, state.budget:clamp(remote.OPEN_DEADLINE_MS, 0))
     if ack and ack.ok then
-      state.winner = { addr = sock, pid = ack.pid, score = 0, reasons = { 'joined a spawning editor' } }
+      state.winner = candidate.new(sock, 'spawning')
+      state.winner.reasons = { 'joined a spawning editor' }
       return true
     end
     if status == 'wedged' then

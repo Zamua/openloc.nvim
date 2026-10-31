@@ -5,6 +5,7 @@ local uv = vim.uv
 local key = require('openloc.key')
 local remote = require('openloc.remote')
 local budget = require('openloc.cli.budget')
+local candidate = require('openloc.cli.candidate')
 local getenv = require('openloc.cli.env').getenv
 local norm_dir = require('openloc.cli.paths').norm_dir
 
@@ -76,14 +77,7 @@ local function add_candidate(state, addr, origin)
   if state.cands[addr] then
     return state.cands[addr]
   end
-  local c = {
-    addr = addr,
-    origin = origin,
-    score = 0,
-    reasons = {},
-    excluded = false,
-    longest = 0,
-  }
+  local c = candidate.new(addr, origin)
   state.cands[addr] = c
   state.order[#state.order + 1] = addr
   return c
