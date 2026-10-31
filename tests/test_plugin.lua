@@ -76,7 +76,7 @@ ok(uv.fs_stat(key.socket_path(rk)) ~= nil, 'claim: root socket on disk')
 ok(connectable(wsock), 'claim: workspace socket connectable')
 
 local dst = uv.fs_stat(key.registry_dir())
-ok(dst ~= nil and dst.mode % 512 == 448, 'claim: registry dir mode 0700',
+ok(dst ~= nil and dst.mode % 512 == tonumber('700', 8), 'claim: registry dir mode 0700',
   dst and ('%o'):format(dst.mode % 512) or 'missing')
 
 local meta = read_json(key.json_path('ws-wtest'))

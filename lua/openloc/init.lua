@@ -73,8 +73,8 @@ end
 
 local function ensure_registry_dir()
   local dir = key.registry_dir()
-  vim.fn.mkdir(dir, 'p', tonumber('700', 8))
-  uv.fs_chmod(dir, tonumber('700', 8))
+  vim.fn.mkdir(dir, 'p', key.DIR_MODE)
+  uv.fs_chmod(dir, key.DIR_MODE)
   return dir
 end
 

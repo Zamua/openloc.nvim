@@ -4,7 +4,19 @@
 local M = {}
 
 -- macOS sun_path is 104 bytes and overflow truncates silently; stay clear.
+M.SUN_PATH_BYTES = 104
 M.MAX_SOCKET_PATH = 100
+
+-- Registry directory permissions: owner only.
+M.DIR_MODE = tonumber('700', 8)
+
+-- Permission bits of an fs_stat mode.
+function M.perm_bits(mode)
+  return mode % 512
+end
+
+-- Longest generated name: a hashed key (prefix, '-', 12 hex) plus '.sock'.
+local WORST_NAME_BYTES = 2 + 1 + 12 + 5
 
 function M.registry_dir()
   return vim.fn.stdpath('cache') .. '/openloc'
@@ -39,6 +51,12 @@ function M.effective_key(key)
     return key
   end
   return hashed(key)
+end
+
+-- Longest socket path the registry can produce under dir. Past MAX_SOCKET_PATH
+-- the hashed form cannot shrink it further.
+function M.worst_socket_path_len(dir)
+  return #(dir or M.registry_dir()) + 1 + WORST_NAME_BYTES
 end
 
 function M.socket_path(key)
