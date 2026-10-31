@@ -682,6 +682,17 @@ do
   r = run_launcher({ 'pick' }, {})
   ok(r.code == 1, 'launcher: the removed pick subcommand is no longer handled',
     r.code .. ' ' .. (r.stderr or ''))
+
+  -- Without the subdir shim the launcher must still reach a CLI that runs:
+  -- the fallback entry has to execute main, not merely load the module.
+  local layout = H.mkdir(s.dir .. '/layout')
+  H.mkdir(layout .. '/herdr')
+  H.mkdir(layout .. '/bin')
+  H.write_file(layout .. '/bin/openloc', slurp(H.root .. '/bin/openloc'))
+  uv.fs_symlink(H.root .. '/lua', layout .. '/lua')
+  r = run_launcher({ 'list' }, { HERDR_PLUGIN_ROOT = layout .. '/herdr' })
+  ok(r.code == 0 and (r.stdout or ''):find('no live editors', 1, true) ~= nil,
+    'launcher: shimless fallback runs the CLI', r.code .. ' ' .. (r.stdout or '') .. (r.stderr or ''))
 end
 
 -- ------------------------------------------------------------ list/doctor
