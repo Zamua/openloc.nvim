@@ -26,6 +26,7 @@ end
 
 -- A fresh spawn takes this long to publish its socket; rapid follow-up
 -- clicks inside the window join it instead of spawning another editor.
+local LOCK_MODE = tonumber('600', 8)
 local SPAWN_LOCK_FRESH_MS = 10000
 local SPAWN_JOIN_WAIT_MS = 4000
 
@@ -52,7 +53,7 @@ end
 local function take_spawn_lock(lock, sock)
   vim.fn.mkdir(key.registry_dir(), 'p')
   for attempt = 1, 2 do
-    local fd = uv.fs_open(lock, 'wx', 384)
+    local fd = uv.fs_open(lock, 'wx', LOCK_MODE)
     if fd then
       uv.fs_write(fd, sock .. '\n' .. tostring(uv.os_getpid()) .. '\n')
       uv.fs_close(fd)

@@ -82,6 +82,18 @@ ok(eff:match('^ws%-%x%x%x%x%x%x%x%x%x%x%x%x$') ~= nil, 'key: long key collapses 
 ok(#key.socket_path(key.ws_key(long_id)) < key.MAX_SOCKET_PATH, 'key: hashed socket path under limit')
 ok(key.effective_key(key.ws_key(long_id)) == eff, 'key: hashed form deterministic')
 
+-- the worst-case bound the diagnostics report really bounds every generated path
+local worst = key.worst_socket_path_len()
+for name, k in pairs({
+  ws = key.ws_key('w1'),
+  root = key.root_key('/some/root'),
+  long_ws = key.ws_key(long_id),
+  spawn = key.ws_key(long_id) .. '-s12345',
+}) do
+  ok(#key.socket_path(k) <= worst, 'key: ' .. name .. ' socket path within the worst-case bound',
+    #key.socket_path(k) .. ' > ' .. worst)
+end
+
 -- ------------------------------------------------------------- remote.lua
 
 print('== remote ==')

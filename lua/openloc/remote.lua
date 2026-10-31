@@ -36,7 +36,7 @@ function M.make_callback_server(sock_path)
     return M._sock
   end
   local dir = vim.fs.dirname(sock_path)
-  vim.fn.mkdir(dir, 'p', tonumber('700', 8))
+  vim.fn.mkdir(dir, 'p', key.DIR_MODE)
   if uv.fs_stat(sock_path) then
     os.remove(sock_path)
   end
