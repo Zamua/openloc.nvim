@@ -1,5 +1,14 @@
--- One candidate editor as the CLI reports it: the JSON views and the text
--- rows. Every output format is defined here and nowhere else.
+-- One candidate editor: its lifecycle state and every output format (JSON
+-- views, text rows).
+--
+-- c.state is a single enum:
+--   unprobed   address known, no answer recorded yet
+--   ok         answered the probe and is eligible
+--   excluded   answered the probe, ruled out by scoring (reason recorded)
+--   dead       connect failed
+--   wedged     accepted the socket, never answered
+--   self       this CLI process
+--   duplicate  second socket of an editor already listed
 
 local M = {}
 
@@ -7,11 +16,57 @@ function M.new(addr, origin)
   return {
     addr = addr,
     origin = origin,
+    state = 'unprobed',
     score = 0,
     reasons = {},
-    excluded = false,
     longest = 0,
   }
+end
+
+local UNUSABLE_REASON = {
+  wedged = 'unresponsive (accepted socket, no answer)',
+  dead = 'stale socket (connect failed)',
+  self = 'this CLI process',
+}
+
+-- Record a probe outcome: status is ok | dead | wedged | self.
+function M.probed(c, status, payload)
+  c.state = status
+  c.payload = payload
+  if UNUSABLE_REASON[status] then
+    c.reasons[#c.reasons + 1] = UNUSABLE_REASON[status]
+  end
+end
+
+function M.exclude(c, reason)
+  c.state = 'excluded'
+  c.reasons[#c.reasons + 1] = reason
+end
+
+function M.mark_duplicate(c, keep)
+  c.state = 'duplicate'
+  c.reasons[#c.reasons + 1] = 'duplicate socket of ' .. keep.addr
+end
+
+function M.eligible(c)
+  return c.state == 'ok'
+end
+
+-- Answered the probe, whether or not scoring then ruled it out.
+function M.live(c)
+  return c.state == 'ok' or c.state == 'excluded'
+end
+
+function M.probed_yet(c)
+  return c.state ~= 'unprobed'
+end
+
+-- Liveness as output shows it: an excluded editor is still a live one.
+local function status(c)
+  if c.state == 'unprobed' then
+    return nil
+  end
+  return c.state == 'excluded' and 'ok' or c.state
 end
 
 -- Everything any view can show, read off the candidate once.
@@ -24,9 +79,9 @@ local function fields(c)
     ws = p.ws,
     cwd = p.cwd,
     session = c.session,
-    wedged = c.status == 'wedged',
-    excluded = c.excluded,
-    status = c.status,
+    wedged = c.state == 'wedged',
+    excluded = c.state ~= 'ok' and c.state ~= 'unprobed',
+    status = status(c),
     reasons = c.reasons,
   }
 end
@@ -55,7 +110,7 @@ local function dash(v)
 end
 
 local COLUMNS = {
-  status = function(c) return ('%-8s'):format(c.status or '?') end,
+  status = function(c) return ('%-8s'):format(status(c) or '?') end,
   origin = function(c) return ('%-9s'):format(c.origin) end,
   pid = function(c) return ('pid=%-8s'):format(dash(fields(c).pid)) end,
   sess = function(c) return ('sess=%-8s'):format(dash(c.session)) end,
