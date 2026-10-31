@@ -67,70 +67,52 @@ local function split_spec(spec)
   return spec
 end
 
-local SPAWN_MODES = { split = true, never = true }
-local CHOOSE_MODES = { auto = true, never = true }
+-- Every flag the CLI accepts. `value` is the placeholder shown in usage text
+-- and marks flags that take an argument; `number` and `enum` validate it.
+local FLAGS = {
+  json = {},
+  strict = {},
+  ws = { value = 'ID' },
+  session = { value = 'PID' },
+  cwd = { value = 'PATH' },
+  line = { value = 'N', number = true },
+  col = { value = 'N', number = true },
+  addr = { value = 'SOCKET' },
+  spawn = { value = 'split|never', enum = { split = true, never = true } },
+  choose = { value = 'auto|never', enum = { auto = true, never = true } },
+}
 
+-- Returns flags, positionals; or nil, message. A value flag followed by
+-- nothing or by another flag is a usage error, never silently swallowed.
 local function parse_flags(argv, i0)
   local flags, pos = {}, {}
   local i = i0
-  local err
-  -- Consume the next argv entry as a flag value; absent or another flag is
-  -- a usage error, never silently swallowed.
-  local function value(a)
-    i = i + 1
-    local v = argv[i]
-    if v == nil or v:sub(1, 2) == '--' then
-      err = 'flag ' .. a .. ' needs a value'
-      return nil
-    end
-    return v
-  end
-  local function number(a)
-    local v = value(a)
-    if err then
-      return nil
-    end
-    local n = tonumber(v)
-    if not n then
-      err = 'flag ' .. a .. ' takes a number'
-    end
-    return n
-  end
   while i <= #argv do
     local a = argv[i]
-    if a == '--json' then
-      flags.json = true
-    elseif a == '--strict' then
-      flags.strict = true
-    elseif a == '--ws' then
-      flags.ws = value(a)
-    elseif a == '--session' then
-      flags.session = value(a)
-    elseif a == '--cwd' then
-      flags.cwd = value(a)
-    elseif a == '--line' then
-      flags.line = number(a)
-    elseif a == '--col' then
-      flags.col = number(a)
-    elseif a == '--spawn' then
-      flags.spawn = value(a)
-      if not err and not SPAWN_MODES[flags.spawn or ''] then
-        return nil, '--spawn takes split|never'
+    local is_flag = a:sub(1, 2) == '--'
+    local name = is_flag and a:sub(3)
+    local spec = name and FLAGS[name]
+    if spec and spec.value then
+      i = i + 1
+      local v = argv[i]
+      if v == nil or v:sub(1, 2) == '--' then
+        return nil, 'flag ' .. a .. ' needs a value'
       end
-    elseif a == '--addr' then
-      flags.addr = value(a)
-    elseif a == '--choose' then
-      flags.choose = value(a)
-      if not err and not CHOOSE_MODES[flags.choose or ''] then
-        return nil, '--choose takes auto|never'
+      if spec.number then
+        v = tonumber(v)
+        if not v then
+          return nil, 'flag ' .. a .. ' takes a number'
+        end
+      elseif spec.enum and not spec.enum[v] then
+        return nil, a .. ' takes ' .. spec.value
       end
-    elseif a:sub(1, 2) == '--' then
+      flags[name] = v
+    elseif spec then
+      flags[name] = true
+    elseif is_flag then
       return nil, 'unknown flag: ' .. a
     else
       pos[#pos + 1] = a
-    end
-    if err then
-      return nil, err
     end
     i = i + 1
   end
@@ -138,6 +120,7 @@ local function parse_flags(argv, i0)
 end
 
 M.USAGE = USAGE
+M.FLAGS = FLAGS
 M.forbidden = forbidden
 M.pct_decode = pct_decode
 M.parse_url = parse_url
