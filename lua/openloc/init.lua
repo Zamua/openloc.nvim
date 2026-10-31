@@ -1,5 +1,5 @@
 -- Editor-side half of openloc: claims registry sockets so the CLI can route
--- an open straight to this instance, and performs the in-editor open.
+-- an open straight to this instance.
 
 local uv = vim.uv
 local key = require('openloc.key')
@@ -158,52 +158,6 @@ function M.claims()
     out[k] = { key = c.key, sock = c.sock, root = c.root, ws = c.ws }
   end
   return out
-end
-
--- Open target in this instance: drop into the current window, reusing a
--- window already showing it. The hide modifier keeps a modified current
--- buffer from E37ing under 'nohidden'; it stays loaded and listed. Clamp
--- line and col instead of erroring, zv unfolds, zz centers. Never creates
--- the target.
-function M.open(path, line, col)
-  line = tonumber(line)
-  col = tonumber(col)
-  local target = vim.fs.normalize(tostring(path))
-  if target:sub(1, 1) ~= '/' then
-    target = vim.fs.joinpath(vim.fn.getcwd(-1, -1), target)
-  end
-  local rp = uv.fs_realpath(target)
-  local st = rp and uv.fs_stat(rp)
-  if not st or st.type ~= 'file' then
-    return { ok = false, err = 'not an existing regular file: ' .. target }
-  end
-  target = rp
-  local ok, err = pcall(function()
-    vim.cmd('hide drop ' .. vim.fn.fnameescape(target))
-    local last = vim.api.nvim_buf_line_count(0)
-    local l = math.min(math.max(line or 1, 1), last)
-    local text = (vim.api.nvim_buf_get_lines(0, l - 1, l, false)[1]) or ''
-    local c = math.min(math.max((col or 1) - 1, 0), math.max(#text - 1, 0))
-    vim.api.nvim_win_set_cursor(0, { l, c })
-    vim.cmd('normal! zvzz')
-  end)
-  return {
-    ok = ok,
-    -- not the `ok and nil or x` form: `ok and nil` falls through to x
-    err = not ok and tostring(err) or nil,
-    pid = vim.fn.getpid(),
-    buf = vim.api.nvim_buf_get_name(0),
-    line = vim.fn.line('.'),
-    col = vim.fn.col('.'),
-    pane = vim.env.HERDR_PANE_ID,
-    tab = vim.env.HERDR_TAB_ID,
-  }
-end
-
--- RPC-friendly variant: a JSON string survives msgpack round trips without
--- nil-field surprises.
-function M.open_json(path, line, col)
-  return vim.json.encode(M.open(path, line, col))
 end
 
 return M
