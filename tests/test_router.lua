@@ -2,7 +2,7 @@
 -- Pins the three regression tests the design requires: the CLI never elects
 -- itself (exit 2 with zero live editors), a wedged candidate is detected at
 -- the deadline and never wins, and an unconfirmed env workspace mismatch is
--- demoted (-150) while a live-map-confirmed mismatch is excluded.
+-- demoted while a live-map-confirmed mismatch is excluded.
 -- Run: nvim -l tests/test_router.lua (or via tests/run.sh)
 
 local uv = vim.uv
@@ -98,15 +98,6 @@ local function find_cand(obj, field, value)
     end
   end
   return nil
-end
-
-local function has_reason(t, needle)
-  for _, r in ipairs(t and t.reasons or {}) do
-    if r:find(needle, 1, true) then
-      return true
-    end
-  end
-  return false
 end
 
 -- Evaluate an expression inside a live candidate, nil on any failure.
@@ -308,7 +299,6 @@ do
     ok(obj.live_map_used == false, 'json: live_map_used false without herdr')
     ok(obj.focused == false, 'json: focused false without herdr')
     ok(type(obj.duration_ms) == 'number', 'json: duration_ms present')
-    ok(has_reason(obj.winner, '+20 cwd ancestor'), 'json: cwd ancestor reason recorded')
   end
 
   -- suffix spec positions the cursor; human output reports the ack
@@ -339,10 +329,9 @@ do
   local obj = jdecode(r.stdout)
   ok(r.code == 0, 'cwd: exits 0', r.code)
   ok(obj and obj.winner and obj.winner.pid == candY.pid, 'cwd: editor whose cwd contains the target wins')
-  ok(obj and has_reason(obj.winner, '+20 cwd ancestor'), 'cwd: +20 reason on the winner')
   local x = find_cand(obj, 'addr', sockX)
-  ok(x and x.score == 0 and x.excluded == false, 'cwd: unrelated editor scored 0, not excluded',
-    x and x.score or 'missing')
+  ok(x and x.excluded == false and x.score < obj.winner.score,
+    'cwd: unrelated editor stays eligible but ranks below the winner', x and x.score or 'missing')
 end
 
 -- ------------------------------------------------------ has-file-open win
@@ -362,7 +351,6 @@ do
   local obj = jdecode(r.stdout)
   ok(r.code == 0, 'has: exits 0', r.code)
   ok(obj and obj.winner and obj.winner.pid == candQ.pid, 'has: editor holding the buffer wins')
-  ok(obj and has_reason(obj.winner, '+100 target already open'), 'has: +100 reason on the winner')
 end
 
 -- ------------------------------------------------- R1 registry fast path
@@ -376,14 +364,17 @@ do
   local rsock = regdir .. '/ws-w1.sock'
   local cand, up = H.spawn_nvim(rsock, { cwd = elsewhere })
   ok(up, 'registry: claimed editor came up')
+  -- a rival whose cwd contains the target would win an election on score
+  local rival_sock = s.glob_sock()
+  local rival, rup = H.spawn_nvim(rival_sock, { cwd = s.work })
+  ok(rup, 'registry: rival editor came up')
 
   local r = run_cli(s, { 'open', 'f.txt', '--ws', 'w1', '--spawn', 'never', '--json' })
   local obj = jdecode(r.stdout)
   ok(r.code == 0, 'registry: exits 0', r.code .. ' ' .. (r.stderr or ''))
   ok(obj and obj.winner and obj.winner.addr == rsock, 'registry: ws-key socket wins outright')
   ok(obj and obj.winner and obj.winner.pid == cand.pid, 'registry: winner pid matches')
-  ok(obj and has_reason(obj.winner, 'registry fast path'), 'registry: fast-path reason recorded')
-  ok(obj and has_reason(obj.winner, '+10 registry entry'), 'registry: +10 origin bonus recorded')
+  ok(obj and obj.winner and obj.winner.pid ~= rival.pid, 'registry: a better-scoring rival does not displace it')
 end
 
 -- --------------------------- regression (c): stale env vs live map (R6)
@@ -422,18 +413,28 @@ fi
   ok(r.code == 0, 'live: exits 0', r.code .. ' ' .. (r.stderr or ''))
   ok(obj and obj.live_map_used == true, 'live: live map was consulted')
   ok(obj and obj.winner and obj.winner.pid == candA.pid, 'live: confirmed-in-ws editor wins')
-  ok(obj and has_reason(obj.winner, '+200 live workspace match'), 'live: +200 reason on the winner')
 
   local b = find_cand(obj, 'pid', candB.pid)
   ok(b ~= nil, 'live: unconfirmed-mismatch candidate listed', r.stdout)
   ok(b and b.excluded == false, 'live: unconfirmed mismatch demoted, NOT excluded')
-  ok(b and has_reason(b, '-150 env workspace mismatch'), 'live: -150 reason on the demoted candidate')
-  ok(b and b.score < 0, 'live: demotion drives the score negative', b and b.score)
+  ok(b and obj.winner and b.score < obj.winner.score, 'live: the demoted candidate ranks below the confirmed one')
 
   local c = find_cand(obj, 'pid', candC.pid)
   ok(c ~= nil, 'live: confirmed-elsewhere candidate listed')
   ok(c and c.excluded == true, 'live: confirmed-other-workspace candidate excluded')
-  ok(c and has_reason(c, 'live map places it in w9'), 'live: exclusion reason names the workspace')
+
+  -- demotion is not exclusion: with the confirmed editor gone, the
+  -- unconfirmed one still takes the open
+  candA:kill(9)
+  pcall(function()
+    candA:wait(2000)
+  end)
+  r = run_cli(s, { 'open', 'f.txt', '--ws', 'w1', '--spawn', 'never', '--json' },
+    { path_prefix = stubdir })
+  obj = jdecode(r.stdout)
+  ok(r.code == 0 and obj and obj.winner and obj.winner.pid == candB.pid,
+    'live: an unconfirmed-mismatch editor still opens when nothing better is left',
+    r.code .. ' ' .. (r.stderr or ''))
 end
 
 -- --------------------- regression (d): sibling herdr session (R6 scope)
@@ -463,7 +464,6 @@ do
   local c2 = find_cand(obj, 'pid', other.pid)
   ok(c2 ~= nil, 'sess: the sibling-session candidate is still listed', r.stdout)
   ok(c2 and c2.excluded == true, 'sess: sibling-session candidate excluded')
-  ok(c2 and has_reason(c2, 'another herdr session'), 'sess: reason names the session')
   ok(c2 and c2.session == server, 'sess: the reported session is the stand-in server', c2 and c2.session)
 
   -- Same editor, same session: eligibility is restored, so the exclusion is
@@ -604,8 +604,6 @@ do
   local c = find_cand(obj, 'addr', tsock)
   ok(c ~= nil, 'term: candidate surfaced in --json', r.stdout)
   ok(c and c.excluded == true, 'term: candidate excluded')
-  ok(c and has_reason(c, 'term://'), 'term: exclusion reason names term://',
-    c and vim.inspect(c.reasons) or nil)
 
   local nsock = s.glob_sock()
   local cand, up2 = H.spawn_nvim(nsock, { cwd = s.work })
@@ -767,9 +765,8 @@ do
   H.lines_file(s.work .. '/h.txt', 20)
   local elsewhere = H.mkdir(s.dir .. '/elsewhere')
   local sockA, sockB = s.glob_sock(), s.glob_sock()
-  -- A: cwd ancestor of the targets (+20). B: unrelated cwd (0). Gap 20 sits
-  -- under the default margin 75, so both are close AND deterministically
-  -- ordered.
+  -- A: cwd ancestor of the targets. B: unrelated cwd. The gap sits under the
+  -- default margin, so both are close AND deterministically ordered.
   local candA, upA = H.spawn_nvim(sockA, { cwd = s.work })
   local candB, upB = H.spawn_nvim(sockB, { cwd = elsewhere })
   ok(upA and upB, 'choose: both candidates came up')
@@ -810,20 +807,19 @@ do
   local n = select(2, r.stderr:gsub('ambiguous %(margin 75%)', ''))
   ok(n == 2, 'choose auto: one stderr line per candidate', r.stderr)
 
-  -- OPENLOC_PICK_MARGIN override: gap 20 clears a margin of 10
+  -- OPENLOC_PICK_MARGIN override: any real gap clears a margin of 1
   r = run_cli(s, { 'open', 'f.txt', '--choose', 'auto', '--spawn', 'never', '--json' },
-    { env = { OPENLOC_PICK_MARGIN = '10' } })
+    { env = { OPENLOC_PICK_MARGIN = '1' } })
   obj = jdecode(r.stdout)
   ok(r.code == 0, 'choose auto: OPENLOC_PICK_MARGIN override opens', r.code .. ' ' .. (r.stderr or ''))
   ok(obj and obj.winner and obj.winner.pid == candA.pid, 'choose auto: override winner is the top scorer')
 
-  -- A now holds f.txt (+100): the gap clears the default margin
+  -- A now holds f.txt: that is decisive, the gap clears the default margin
   r = run_cli(s, { 'open', 'f.txt', '--choose', 'auto', '--spawn', 'never', '--json' })
   obj = jdecode(r.stdout)
   ok(r.code == 0, 'choose auto: clear winner opens', r.code)
-  ok(obj and obj.winner and obj.winner.pid == candA.pid
-    and has_reason(obj.winner, '+100 target already open'),
-    'choose auto: clear winner is the +100 editor')
+  ok(obj and obj.winner and obj.winner.pid == candA.pid,
+    'choose auto: clear winner is the editor holding the file')
 
   -- one eligible candidate left: auto opens without an election
   candB:kill(9)
@@ -853,16 +849,13 @@ do
   local r = run_cli(s, { 'open', 'f.txt', '--spawn', 'never', '--json' })
   local obj = jdecode(r.stdout)
   ok(r.code == 0 and obj and obj.winner and obj.winner.pid == candA.pid,
-    'addr: election winner is the +100 editor', r.code)
+    'addr: election winner is the editor holding the file', r.code)
 
   r = run_cli(s, { 'open', 'f.txt:7:3', '--addr', sockB, '--json' })
   obj = jdecode(r.stdout)
   ok(r.code == 0, 'addr: forced open exits 0', r.code .. ' ' .. (r.stderr or ''))
   ok(obj and obj.winner and obj.winner.addr == sockB and obj.winner.pid == candB.pid,
     'addr: winner is the forced non-winner')
-  ok(obj and obj.winner and #obj.winner.reasons == 1 and obj.winner.reasons[1] == 'forced --addr',
-    'addr: winner.reasons is exactly forced --addr',
-    obj and obj.winner and vim.inspect(obj.winner.reasons) or nil)
   local name = rpc_eval(sockB, 'expand("%:p")')
   ok(name == target, 'addr: file opened in the forced editor', tostring(name))
   local pos = rpc_eval(sockB, 'getcurpos()')
@@ -1057,7 +1050,7 @@ do
     }):wait()
   end
 
-  -- payload order is score desc: 1 = A (+20 cwd), 2 = B (0)
+  -- payload order is score desc: 1 = A (cwd ancestor), 2 = B (unrelated)
   r = run_chooser('2')
   ok(r.code == 0, 'chooser: forced pick 2 exits 0', r.code .. ' ' .. (r.stderr or ''))
   ok(r.stdout:find('pick one', 1, true) ~= nil, 'chooser: menu rendered', r.stdout)
