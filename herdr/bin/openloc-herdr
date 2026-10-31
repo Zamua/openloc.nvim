@@ -3,36 +3,9 @@
 # hands off. herdr invokes it as: bash bin/openloc-herdr <subcommand>.
 set -euo pipefail
 
-err() { printf 'openloc-herdr: %s\n' "$*" >&2; }
-
-# nvim is frequently absent from the minimal PATH a server-spawned action gets.
-resolve_nvim() {
-  if [ -n "${OPENLOC_NVIM:-}" ] && [ -x "${OPENLOC_NVIM:-}" ]; then
-    printf '%s\n' "$OPENLOC_NVIM"
-    return 0
-  fi
-  if command -v nvim >/dev/null 2>&1; then
-    command -v nvim
-    return 0
-  fi
-  local cand
-  for cand in /opt/homebrew/bin/nvim /usr/local/bin/nvim /usr/bin/nvim; do
-    if [ -x "$cand" ]; then
-      printf '%s\n' "$cand"
-      return 0
-    fi
-  done
-  return 1
-}
-
-# HERDR_BIN_PATH may be unset in older herdr versions.
-resolve_herdr() {
-  if [ -n "${HERDR_BIN_PATH:-}" ] && [ -x "${HERDR_BIN_PATH:-}" ]; then
-    printf '%s\n' "$HERDR_BIN_PATH"
-    return 0
-  fi
-  command -v herdr
-}
+OPENLOC_PROG=openloc-herdr
+# shellcheck source=lib.sh
+. "$(dirname -- "${BASH_SOURCE[0]}")/lib.sh"
 
 # Actions run detached, so a failed open is invisible without a toast.
 toast_failure() {
@@ -52,7 +25,7 @@ run_cli_notify() {
   status=0
   "$NVIM_BIN" -l "$CLI" "$@" 2>"$stderr_file" || status=$?
   cat "$stderr_file" >&2
-  if [ "$status" -ne 0 ] && [ "$status" -ne 6 ]; then
+  if [ "$status" -ne 0 ] && [ "$status" -ne "$OPENLOC_EXIT_AMBIGUOUS" ]; then
     first="$(head -n 1 "$stderr_file" 2>/dev/null || true)"
     toast_failure "$status" "$first"
   fi
@@ -86,7 +59,7 @@ run_cli_choose() {
     exit 0
   fi
 
-  if [ "$status" -eq 6 ]; then
+  if [ "$status" -eq "$OPENLOC_EXIT_AMBIGUOUS" ]; then
     rm -f "$stderr_file"
     herdr_bin="$(resolve_herdr 2>/dev/null || true)"
     if [ -n "$herdr_bin" ] && "$herdr_bin" plugin pane open --plugin openloc --entrypoint choose \
@@ -106,10 +79,8 @@ run_cli_choose() {
 
 NVIM_BIN="$(resolve_nvim)" || { err 'no nvim found; set OPENLOC_NVIM'; exit 1; }
 
-ROOT="${HERDR_PLUGIN_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"
-CLI="${OPENLOC_CLI:-$ROOT/cli/openloc.lua}"
-[ -f "$CLI" ] || CLI="$ROOT/../bin/openloc"
-[ -f "$CLI" ] || { err "no CLI found under $ROOT; reinstall the plugin"; exit 1; }
+ROOT="$(plugin_root)"
+CLI="$(resolve_cli "$ROOT")" || { err "no CLI found under $ROOT; reinstall the plugin"; exit 1; }
 
 cmd="${1:-}"
 case "$cmd" in

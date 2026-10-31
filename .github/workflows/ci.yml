@@ -31,7 +31,7 @@ jobs:
 
       - name: Static checks
         run: |
-          bash -n herdr/bin/openloc-herdr
+          for f in herdr/bin/*; do bash -n "$f"; done
           python3 - <<'EOF'
           import tomllib
           with open("herdr/herdr-plugin.toml", "rb") as f:
