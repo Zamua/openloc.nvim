@@ -1,6 +1,7 @@
 -- Result output: the --json object, human lines and the ambiguous report.
 
 local EXIT = require('openloc.cli.exit')
+local candidate = require('openloc.cli.candidate')
 
 local M = {}
 
@@ -8,19 +9,7 @@ local function candidate_json(state)
   local out = {}
   for _, addr in ipairs(state.order) do
     local c = state.cands[addr]
-    local p = c.payload or {}
-    out[#out + 1] = {
-      addr = c.addr,
-      pid = p.pid,
-      score = c.score,
-      ws = p.ws,
-      cwd = p.cwd,
-      session = c.session,
-      wedged = c.status == 'wedged',
-      excluded = c.excluded,
-      status = c.status,
-      reasons = c.reasons,
-    }
+    out[#out + 1] = candidate.json(c, 'full')
   end
   return out
 end
@@ -36,12 +25,7 @@ local function emit(state, code, human, err)
       target = state.target,
       line = state.line,
       col = state.col,
-      winner = w and {
-        addr = w.addr,
-        pid = w.payload and w.payload.pid,
-        score = w.score,
-        reasons = w.reasons,
-      } or nil,
+      winner = w and candidate.json(w, 'winner') or nil,
       candidates = candidate_json(state),
       session = state.session or nil,
       live_map_used = state.live_map_used,
@@ -76,16 +60,7 @@ local function emit_ambiguous(state, eligible, margin)
   if state.json then
     local cands = {}
     for _, c in ipairs(eligible) do
-      local p = c.payload or {}
-      cands[#cands + 1] = {
-        addr = c.addr,
-        pid = p.pid,
-        score = c.score,
-        cwd = p.cwd,
-        ws = p.ws,
-        session = c.session,
-        reasons = c.reasons,
-      }
+      cands[#cands + 1] = candidate.json(c, 'choice')
     end
     io.stdout:write(vim.json.encode({
       ok = false,
@@ -100,17 +75,28 @@ local function emit_ambiguous(state, eligible, margin)
     }), '\n')
   else
     for _, c in ipairs(eligible) do
-      local p = c.payload or {}
-      io.stderr:write(string.format(
-        'openloc: ambiguous (margin %d): score=%-5d pid=%-8s ws=%-8s cwd=%s addr=%s\n',
-        margin, c.score, tostring(p.pid or '-'), tostring(p.ws or '-'), tostring(p.cwd or '-'), c.addr
-      ))
+      io.stderr:write(string.format('openloc: ambiguous (margin %d): %s\n', margin,
+        candidate.row(c, candidate.CHOICE_ROW)))
     end
   end
   return EXIT.ambiguous
 end
 
+-- Human `list` output: one row per candidate, reasons trailing.
+local function list_rows(state)
+  if #state.order == 0 then
+    io.stdout:write('no live editors found\n')
+    return
+  end
+  for _, addr in ipairs(state.order) do
+    local c = state.cands[addr]
+    io.stdout:write(candidate.row(c, candidate.LIST_ROW),
+      #c.reasons > 0 and ('  [' .. table.concat(c.reasons, '; ') .. ']') or '', '\n')
+  end
+end
+
 M.emit = emit
 M.emit_ambiguous = emit_ambiguous
+M.list_rows = list_rows
 
 return M
