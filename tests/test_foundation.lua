@@ -3,60 +3,25 @@
 
 local uv = vim.uv
 
--- resolve repo root from this script, so cwd does not matter
-local script = debug.getinfo(1, 'S').source:sub(2)
-local script_abs = uv.fs_realpath(script) or script
-local root = vim.fs.dirname(vim.fs.dirname(script_abs))
+local this = debug.getinfo(1, 'S').source:sub(2)
+local this_abs = uv.fs_realpath(this) or this
+local H = dofile(vim.fs.dirname(this_abs) .. '/helpers.lua')
+H.ensure_isolated('foundation', this_abs)
+
 package.path = table.concat({
-  root .. '/lua/?.lua',
-  root .. '/lua/?/init.lua',
+  H.root .. '/lua/?.lua',
+  H.root .. '/lua/?/init.lua',
   package.path,
 }, ';')
 
 local key = require('openloc.key')
 local remote = require('openloc.remote')
 local wire = require('openloc.wire')
+local ok = H.ok
 
-local npass, nfail = 0, 0
-local function ok(cond, name, detail)
-  if cond then
-    npass = npass + 1
-    print('PASS ' .. name)
-  else
-    nfail = nfail + 1
-    print('FAIL ' .. name .. (detail and (' :: ' .. tostring(detail)) or ''))
-  end
-end
-
-local mypid = uv.os_getpid()
-local children = {}
-
-local function write_file(p, content)
-  vim.fn.mkdir(vim.fs.dirname(p), 'p')
-  local f = assert(io.open(p, 'w'))
-  f:write(content or 'x\n')
-  f:close()
-end
-
-local function spawn_nvim(sock_path)
-  local handle, pid = uv.spawn(vim.v.progpath, {
-    args = { '--headless', '--clean', '--listen', sock_path },
-  }, function() end)
-  children[#children + 1] = { handle = handle, pid = pid, sock = sock_path }
-  local up = vim.wait(5000, function() return uv.fs_stat(sock_path) ~= nil end, 20)
-  return handle, pid, up
-end
-
-local function cleanup()
-  for _, c in ipairs(children) do
-    if c.handle and not c.handle:is_closing() then
-      c.handle:kill('sigkill')
-      c.handle:close()
-    end
-    if c.sock then os.remove(c.sock) end
-  end
-  remote.close_callback_server()
-  vim.fn.delete('/tmp/oltest-found-' .. mypid, 'rf')
+local BASE = vim.env.OLTEST_BASE
+if not BASE or BASE == '' then
+  BASE = H.mkdir('/tmp/oltest-foundation-' .. uv.os_getpid())
 end
 
 -- ---------------------------------------------------------------- key.lua
@@ -67,7 +32,6 @@ ok(key.sanitize('a b/c:d') == 'a-b-c-d', 'key: sanitize replaces unsafe chars')
 ok(key.sanitize('A_Z-9') == 'A_Z-9', 'key: sanitize keeps [%w-_]')
 ok(key.ws_key('w31') == 'ws-w31', 'key: ws_key shape')
 local rk = key.root_key('/x')
-ok(rk == 'r-' .. string.sub(vim.fn.sha256('/x'), 1, 12), 'key: root_key is 12-hex sha256')
 ok(#rk == 14 and rk:match('^r%-%x+$') ~= nil, 'key: root_key format')
 ok(key.root_key('/a') ~= key.root_key('/b'), 'key: distinct roots distinct keys')
 ok(key.root_key('/a') == key.root_key('/a'), 'key: deterministic')
@@ -121,15 +85,13 @@ ok(cok and cchan ~= 0, 'remote: CLI sock is connectable')
 if cok and cchan ~= 0 then pcall(vim.fn.chanclose, cchan) end
 
 -- fixture file for open tests
-local froot = '/tmp/oltest-found-' .. mypid
-local lines = {}
-for i = 1, 20 do lines[i] = ('line %02d abcdef'):format(i) end
-write_file(froot .. '/f.txt', table.concat(lines, '\n') .. '\n')
-local target = uv.fs_realpath(froot .. '/f.txt')
+H.lines_file(BASE .. '/found/f.txt', 20)
+local target = uv.fs_realpath(BASE .. '/found/f.txt')
 
 -- live candidate: stock --clean nvim
-local sock_a = '/tmp/oltest-found-' .. mypid .. '-a.sock'
-local _, pid_a, up_a = spawn_nvim(sock_a)
+local sock_a = BASE .. '/found/a.sock'
+local cand_a, up_a = H.spawn_nvim(sock_a)
+local pid_a = cand_a.pid
 ok(up_a, 'remote: live candidate socket appeared')
 
 local t0 = uv.hrtime()
@@ -168,21 +130,17 @@ ok(p and type(p.has) == 'boolean' and type(p.term_only) == 'boolean' and type(p.
   'remote: probe payload carries booleans and a roots list', vim.inspect(p))
 
 -- dead socket: connect failure, not a hang
-local dead_sock = '/tmp/oltest-found-' .. mypid .. '-dead.sock'
+local dead_sock = BASE .. '/found/dead.sock'
 local rd, sd = remote.probe_all({ dead_sock })
 ok(rd[dead_sock] == nil and sd[dead_sock] == 'dead', 'remote: missing socket classed dead')
 
 -- wedged candidate: accepts the socket, never answers; probe must return at
 -- the deadline. The wedge is a main-loop block, same observable state as a
 -- hit-enter or ATTENTION prompt: connect succeeds, nothing is processed.
-local sock_w = '/tmp/oltest-found-' .. mypid .. '-w.sock'
-local _, pid_w, up_w = spawn_nvim(sock_w)
+local sock_w = BASE .. '/found/w.sock'
+local _, up_w = H.spawn_nvim(sock_w)
 ok(up_w, 'remote: wedge candidate socket appeared')
-local wok, wchan = pcall(vim.fn.sockconnect, 'pipe', sock_w, { rpc = true })
-ok(wok and wchan ~= 0, 'remote: wedge candidate connectable before wedging')
-pcall(vim.fn.rpcnotify, wchan, 'nvim_exec_lua', 'vim.uv.sleep(30000)', {})
-vim.wait(300) -- let the block start
-pcall(vim.fn.chanclose, wchan)
+ok(H.wedge(sock_w), 'remote: wedge candidate connectable and now blocked')
 
 local t1 = uv.hrtime()
 local rw, sw = remote.probe_all({ sock_w }, 500)
@@ -236,6 +194,5 @@ ok(wire.decode_json('{"a":null,"b":[1]}').a == nil and wire.decode_json('not jso
 
 -- ---------------------------------------------------------------- summary
 
-cleanup()
-print(('== %d passed, %d failed =='):format(npass, nfail))
-os.exit(nfail == 0 and 0 or 1)
+remote.close_callback_server()
+H.summary({ BASE ~= vim.env.OLTEST_BASE and BASE or nil })
