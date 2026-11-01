@@ -77,12 +77,13 @@ do
   ok(logged:find('/openloc/ws%-w1') ~= nil or logged:find('openloc/ws%-w1') ~= nil,
     'slock: the known socket is the workspace registry socket', logged)
 
-  -- fresh lock + live socket: the second click JOINS instead of splitting
+  -- fresh lock + live socket: the second click JOINS instead of splitting.
+  -- The socket sits where discovery cannot see it, so only the lock leads there.
   local s2 = scenario('sjoin')
   H.lines_file(s2.work .. '/f.txt', 20)
   local stub2, log2 = spawn_stub(s2, 'stub')
   local regdir = H.mkdir(s2.cache .. '/nvim/openloc')
-  local sock2 = regdir .. '/ws-w1.sock'
+  local sock2 = H.mkdir(s2.dir .. '/booting') .. '/spawned.sock'
   H.write_file(regdir .. '/spawn-ws-w1.lock', sock2 .. '\n0\n')
   local _, up = H.spawn_nvim(sock2, { cwd = s2.work })
   ok(up, 'sjoin: the "just spawned" editor is listening')
@@ -93,6 +94,7 @@ do
   local obj2 = jdecode(r2.stdout)
   ok(r2.code == 0, 'sjoin: joiner exits 0', r2.code .. ' ' .. (r2.stderr or ''))
   ok(obj2 and obj2.winner and obj2.winner.addr == sock2, 'sjoin: opened into the spawning editor', r2.stdout)
+  ok(obj2 and #obj2.candidates == 0, 'sjoin: the editor was reached through the lock, not elected', r2.stdout)
   local logged2 = slurp(log2)
   ok(logged2:find('pane split', 1, true) == nil, 'sjoin: no second split', logged2)
   local pos = rpc_eval(sock2, 'expand("%:t") .. ":" .. line(".")')
@@ -140,6 +142,56 @@ do
     or slurp(vim.fn.glob(s4.cache .. '/nvim/openloc/spawn-*.lock', true, true)[1] or lock4)
       :find(vim.pesc(vim.fs.basename(sock_b))) ~= nil,
     'suniq: the lock names the stealer socket so joiners follow it')
+
+  -- A failed split releases the lock, so the next click spawns at once
+  -- instead of waiting out a join.
+  local s6 = scenario('sfail')
+  H.lines_file(s6.work .. '/f.txt', 20)
+  local stub6 = s6.dir .. '/stub'
+  S.herdr_stub(stub6, [[#!/bin/sh
+case "$1 $2" in
+  "pane list") echo '{"id":1,"result":{"panes":[]}}' ;;
+  *) echo '{"id":9,"error":{"code":"split_refused"}}' ;;
+esac
+]])
+  local r6 = run_cli(s6, { 'open', 'f.txt', '--json' }, {
+    path_prefix = stub6,
+    env = { HERDR_PLUGIN_CONTEXT_JSON = ctx_of(s6), HERDR_PLUGIN_ROOT = stub6 },
+  })
+  ok(r6.code == 2, 'sfail: a failed split exits 2', r6.code .. ' ' .. (r6.stderr or ''))
+  ok(#vim.fn.glob(s6.cache .. '/nvim/openloc/spawn-*.lock', true, true) == 0, 'sfail: the lock is released')
+end
+
+print('== spawn lock: join timeout ==')
+do
+  -- Two clicks join a spawner whose editor never comes up. Once both time
+  -- out, exactly one spawns; the other finds the lock re-taken and stops.
+  local s = scenario('sjointo')
+  H.lines_file(s.work .. '/f.txt', 20)
+  local stub, log = S.spawn_stub(s, 'stub')
+  local regdir = H.mkdir(s.cache .. '/nvim/openloc')
+  local lock = regdir .. '/spawn-ws-w1.lock'
+  H.write_file(lock, regdir .. '/ws-w1-sdead.sock\n0\n')
+  local opts = { path_prefix = stub, env = { HERDR_PLUGIN_CONTEXT_JSON = S.plugin_ctx(s), HERDR_PLUGIN_ROOT = stub } }
+  local p1 = S.start_cli(s, { 'open', 'f.txt', '--json' }, opts)
+  -- Staggered so the first CLI has retracted its startup socket, which the
+  -- second would otherwise discover as an editor.
+  vim.wait(300)
+  local p2 = S.start_cli(s, { 'open', 'f.txt', '--json' }, opts)
+  local results = { p1:wait(), p2:wait() }
+  local _, splits = slurp(log):gsub('pane split', '')
+  ok(splits == 1, 'sjointo: two timed-out joiners split exactly one pane', splits)
+  local spawned, stopped = 0, 0
+  for _, r in ipairs(results) do
+    if r.code == 0 and (jdecode(r.stdout) or {}).spawned == true then
+      spawned = spawned + 1
+    elseif r.code == 2 then
+      stopped = stopped + 1
+    end
+  end
+  ok(spawned == 1 and stopped == 1, 'sjointo: one spawns, the other exits 2',
+    vim.inspect(vim.tbl_map(function(r) return { r.code, r.stderr } end, results)))
+  ok(slurp(lock):find('ws-w1-sdead', 1, true) == nil, 'sjointo: the lock names the new spawner')
 end
 
 S.summary()

@@ -52,9 +52,10 @@ return function(H, name)
     }
   end
 
-  -- Invoke the CLI with the scenario's isolated env. HERDR_*/OPENLOC_* are
-  -- masked to '' (the CLI treats empty as unset); opts.env overrides win.
-  function S.run_cli(s, args, opts)
+  -- Start the CLI with the scenario's isolated env and return the running
+  -- process; :wait() collects it. HERDR_*/OPENLOC_* are masked to '' (the CLI
+  -- treats empty as unset); opts.env overrides win.
+  function S.start_cli(s, args, opts)
     opts = opts or {}
     local env = vim.tbl_extend('force', S.isolated_env(s), {
       PATH = (opts.path_prefix and (opts.path_prefix .. ':') or '') .. '/usr/bin:/bin',
@@ -77,13 +78,18 @@ return function(H, name)
     end
     local argv = { vim.v.progpath, '-l', OPENLOC }
     vim.list_extend(argv, args)
-    local t0 = uv.hrtime()
-    local res = vim.system(argv, {
+    return vim.system(argv, {
       env = env,
       cwd = opts.cwd or s.work,
       text = true,
       timeout = 8000,
-    }):wait()
+    })
+  end
+
+  -- Run the CLI to completion; res.ms is its wall time.
+  function S.run_cli(s, args, opts)
+    local t0 = uv.hrtime()
+    local res = S.start_cli(s, args, opts):wait()
     res.ms = (uv.hrtime() - t0) / 1e6
     return res
   end

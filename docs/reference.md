@@ -16,7 +16,7 @@ nvim -l bin/openloc doctor
 | exit | meaning |
 | --- | --- |
 | 0 | opened |
-| 2 | no editor found and spawning disabled |
+| 2 | no editor found and none spawned |
 | 3 | path did not resolve to an existing file |
 | 4 | editor found but the open failed |
 | 5 | deadline exceeded: target accepted the socket, never answered |
