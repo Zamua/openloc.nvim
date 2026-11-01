@@ -100,6 +100,23 @@ do
   local pos = rpc_eval(sock2, 'expand("%:t") .. ":" .. line(".")')
   ok(pos == 'f.txt:7', 'sjoin: file and line landed in the joined editor', tostring(pos))
 
+  -- A spawning editor that takes the open and never answers may already
+  -- hold the file: report it wedged rather than split a second editor.
+  local s7 = scenario('swedge')
+  H.lines_file(s7.work .. '/f.txt', 20)
+  local stub7, log7 = spawn_stub(s7, 'stub')
+  local regdir7 = H.mkdir(s7.cache .. '/nvim/openloc')
+  local sock7 = H.mkdir(s7.dir .. '/booting') .. '/spawned.sock'
+  H.write_file(regdir7 .. '/spawn-ws-w1.lock', sock7 .. '\n0\n')
+  local _, up7 = H.spawn_nvim(sock7, { cwd = s7.work })
+  ok(up7 and H.wedge(sock7, 8000), 'swedge: the spawning editor is listening and wedged')
+  local r7 = run_cli(s7, { 'open', 'f.txt', '--json' }, {
+    path_prefix = stub7,
+    env = { HERDR_PLUGIN_CONTEXT_JSON = ctx_of(s7), HERDR_PLUGIN_ROOT = stub7 },
+  })
+  ok(r7.code == 5, 'swedge: a wedged spawning editor exits 5', r7.code .. ' ' .. (r7.stderr or ''))
+  ok(slurp(log7):find('pane split', 1, true) == nil, 'swedge: no second split', slurp(log7))
+
   -- stale lock: steal it and spawn
   local s3 = scenario('sstale')
   H.lines_file(s3.work .. '/f.txt', 20)
