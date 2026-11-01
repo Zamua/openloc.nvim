@@ -11,6 +11,7 @@ local herdr = require('openloc.cli.herdr')
 local norm_dir = require('openloc.cli.paths').norm_dir
 local candidate = require('openloc.cli.candidate')
 local report = require('openloc.cli.report')
+local spawn_lock = require('openloc.cli.spawn_lock')
 
 local HERDR_CALL_MS = budget.HERDR_CALL_MS
 local RESERVE_OPEN_MS = budget.RESERVE_OPEN_MS
@@ -25,10 +26,8 @@ local function resolve_nvim()
   return vim.v.progpath
 end
 
--- A fresh spawn takes this long to publish its socket; rapid follow-up
--- clicks inside the window join it instead of spawning another editor.
-local LOCK_MODE = tonumber('600', 8)
-local SPAWN_LOCK_FRESH_MS = 10000
+-- How long a click waits for a spawning editor to answer before it
+-- re-checks the lock.
 local SPAWN_JOIN_WAIT_MS = 4000
 
 local function spawn_key(ctx, root)
@@ -49,44 +48,9 @@ local function spawn_sock_path(k)
   return key.socket_path(k .. '-s' .. uv.os_getpid())
 end
 
--- Returns 'acquired' | 'fresh' | nil (unlockable dir). A stale lock is a
--- spawn that never came up; steal it.
-local function take_spawn_lock(lock, sock)
-  vim.fn.mkdir(key.registry_dir(), 'p')
-  for attempt = 1, 2 do
-    local fd = uv.fs_open(lock, 'wx', LOCK_MODE)
-    if fd then
-      uv.fs_write(fd, sock .. '\n' .. tostring(uv.os_getpid()) .. '\n')
-      uv.fs_close(fd)
-      return 'acquired'
-    end
-    local st = uv.fs_stat(lock)
-    if not st then
-      -- lost a race with a steal; retry once
-    elseif (os.time() - st.mtime.sec) * 1000 < SPAWN_LOCK_FRESH_MS then
-      return 'fresh'
-    else
-      os.remove(lock)
-    end
-    if attempt == 2 then
-      return nil
-    end
-  end
-end
-
--- A fresh lock names the socket a just-spawned editor will listen on. Poll
--- it and open there; joining beats spawning a second editor. On timeout
--- (editor never came up) the caller spawns anyway.
-local function join_spawning_editor(state, lock, target, line, col)
-  local f = io.open(lock, 'r')
-  if not f then
-    return false
-  end
-  local sock = f:read('*l')
-  f:close()
-  if type(sock) ~= 'string' or sock == '' then
-    return false
-  end
+-- Poll the socket a spawning editor will listen on and open there; joining
+-- beats spawning a second editor. False when it never answers in time.
+local function join_spawning_editor(state, sock, target, line, col)
   local function try_open()
     if not uv.fs_stat(sock) then
       return nil
@@ -111,8 +75,8 @@ local function join_spawning_editor(state, lock, target, line, col)
     end
     vim.wait(150)
   end
-  -- Last chance before the caller steals and double-spawns: the first
-  -- editor often finishes booting right at the deadline.
+  -- Last chance before the caller re-checks the lock: the first editor
+  -- often finishes booting right at the deadline.
   vim.wait(300)
   return try_open() == true
 end
@@ -134,19 +98,23 @@ local function spawn_fallback(state, ctx, target, line, col, spawn_mode, root)
     local bin = herdr.bin()
     if bin then
       local k = spawn_key(ctx, root or vim.fs.dirname(target))
-      local sock = spawn_sock_path(k)
+      local me = { sock = spawn_sock_path(k), pid = uv.os_getpid() }
       local lock = spawn_lock_path(k)
-      local got = take_spawn_lock(lock, sock)
-      if got == 'fresh' then
-        if join_spawning_editor(state, lock, target, line, col) then
+      local action, held = spawn_lock.step(lock, me, 'acquire')
+      if action == 'join' then
+        if join_spawning_editor(state, held.owner.sock, target, line, col) then
           return report.emit(state, EXIT.ok,
             'opened ' .. target .. ' in a just-spawned editor ' .. state.winner.addr)
         end
-        -- the spawner never came up inside the window; steal and spawn
-        os.remove(lock)
-        take_spawn_lock(lock, sock)
+        action, held = spawn_lock.step(lock, me, 'join_timed_out', held.owner)
       end
-      os.remove(sock)
+      if not action then
+        return report.emit(state, EXIT.no_editor, nil, 'spawn lock unavailable (' .. held .. '); target ' .. target)
+      end
+      if action == 'give_up' then
+        return report.emit(state, EXIT.no_editor, nil, 'another click is already spawning an editor; target ' .. target)
+      end
+      os.remove(me.sock)
       local args = { bin, 'pane', 'split', '--direction', 'right', '--focus' }
       if ctx.focused_pane_id then
         args[#args + 1] = '--pane'
@@ -160,17 +128,18 @@ local function spawn_fallback(state, ctx, target, line, col, spawn_mode, root)
         local cmd = string.format(
           "%s --listen %s '+call cursor(%d,%d)' -- %s",
           vim.fn.shellescape(resolve_nvim()),
-          vim.fn.shellescape(sock),
+          vim.fn.shellescape(me.sock),
           line,
           col,
           vim.fn.shellescape(target)
         )
         if herdr.run(state, { bin, 'pane', 'run', new_pane, cmd }, HERDR_CALL_MS) then
+          spawn_lock.step(lock, me, 'spawned')
           state.spawned = true
           return report.emit(state, EXIT.ok, 'spawned nvim in new pane ' .. new_pane .. ' for ' .. target)
         end
       end
-      os.remove(lock)
+      spawn_lock.step(lock, me, 'spawn_failed')
     end
     return report.emit(state, EXIT.no_editor, nil, 'no running editor found and herdr spawn failed; target ' .. target)
   end
