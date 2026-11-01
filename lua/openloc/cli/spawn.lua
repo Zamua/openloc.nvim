@@ -49,7 +49,8 @@ local function spawn_sock_path(k)
 end
 
 -- Poll the socket a spawning editor will listen on and open there; joining
--- beats spawning a second editor. False when it never answers in time.
+-- beats spawning a second editor. Returns 'ok', 'wedged' (it took the open
+-- and never answered) or 'timeout' (it never came up).
 local function join_spawning_editor(state, sock, target, line, col)
   local function try_open()
     if not uv.fs_stat(sock) then
@@ -59,10 +60,10 @@ local function join_spawning_editor(state, sock, target, line, col)
     if ack and ack.ok then
       state.winner = candidate.new(sock, 'spawning')
       state.winner.reasons = { 'joined a spawning editor' }
-      return true
+      return 'ok'
     end
     if status == 'wedged' then
-      return false
+      return 'wedged'
     end
     return nil
   end
@@ -78,7 +79,7 @@ local function join_spawning_editor(state, sock, target, line, col)
   -- Last chance before the caller re-checks the lock: the first editor
   -- often finishes booting right at the deadline.
   vim.wait(300)
-  return try_open() == true
+  return try_open() or 'timeout'
 end
 
 -- R9. Inside herdr: split a pane and run nvim with the local +call form
@@ -102,9 +103,14 @@ local function spawn_fallback(state, ctx, target, line, col, spawn_mode, root)
       local lock = spawn_lock_path(k)
       local action, held = spawn_lock.step(lock, me, 'acquire')
       if action == 'join' then
-        if join_spawning_editor(state, held.owner.sock, target, line, col) then
+        local joined = join_spawning_editor(state, held.owner.sock, target, line, col)
+        if joined == 'ok' then
           return report.emit(state, EXIT.ok,
             'opened ' .. target .. ' in a just-spawned editor ' .. state.winner.addr)
+        end
+        if joined == 'wedged' then
+          return report.emit(state, EXIT.deadline, nil,
+            'deadline exceeded: ' .. held.owner.sock .. ' accepted the socket but never answered')
         end
         action, held = spawn_lock.step(lock, me, 'join_timed_out', held.owner)
       end
