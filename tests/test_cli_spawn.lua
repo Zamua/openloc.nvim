@@ -85,7 +85,7 @@ do
   local regdir = H.mkdir(s2.cache .. '/nvim/openloc')
   local sock2 = H.mkdir(s2.dir .. '/booting') .. '/spawned.sock'
   H.write_file(regdir .. '/spawn-ws-w1.lock', sock2 .. '\n0\n')
-  local _, up = H.spawn_nvim(sock2, { cwd = s2.work })
+  local ed2, up = H.spawn_nvim(sock2, { cwd = s2.work })
   ok(up, 'sjoin: the "just spawned" editor is listening')
   local r2 = run_cli(s2, { 'open', 'f.txt', '--line', '7', '--json' }, {
     path_prefix = stub2,
@@ -95,6 +95,7 @@ do
   ok(r2.code == 0, 'sjoin: joiner exits 0', r2.code .. ' ' .. (r2.stderr or ''))
   ok(obj2 and obj2.winner and obj2.winner.addr == sock2, 'sjoin: opened into the spawning editor', r2.stdout)
   ok(obj2 and #obj2.candidates == 0, 'sjoin: the editor was reached through the lock, not elected', r2.stdout)
+  ok(obj2 and obj2.winner and obj2.winner.pid == ed2.pid, 'sjoin: --json names the joined editor pid', r2.stdout)
   local logged2 = slurp(log2)
   ok(logged2:find('pane split', 1, true) == nil, 'sjoin: no second split', logged2)
   local pos = rpc_eval(sock2, 'expand("%:t") .. ":" .. line(".")')
