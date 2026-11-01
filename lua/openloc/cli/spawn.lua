@@ -12,6 +12,7 @@ local norm_dir = require('openloc.cli.paths').norm_dir
 local candidate = require('openloc.cli.candidate')
 local report = require('openloc.cli.report')
 local spawn_lock = require('openloc.cli.spawn_lock')
+local wire = require('openloc.wire')
 
 local HERDR_CALL_MS = budget.HERDR_CALL_MS
 local RESERVE_OPEN_MS = budget.RESERVE_OPEN_MS
@@ -58,8 +59,11 @@ local function join_spawning_editor(state, sock, target, line, col)
     end
     local ack, status = remote.open_in(sock, target, line, col, state.budget:clamp(remote.OPEN_DEADLINE_MS, 0))
     if ack and ack.ok then
-      state.winner = candidate.new(sock, 'spawning')
-      state.winner.reasons = { 'joined a spawning editor' }
+      -- The ack proves it live and carries the probe's identity fields.
+      local c = candidate.new(sock, 'spawning')
+      candidate.probed(c, 'ok', wire.decode_probe({ pid = ack.pid, pane = ack.pane, tab = ack.tab }))
+      c.reasons = { 'joined a spawning editor' }
+      state.winner = c
       return 'ok'
     end
     if status == 'wedged' then
